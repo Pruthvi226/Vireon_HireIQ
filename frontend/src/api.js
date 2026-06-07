@@ -1,8 +1,15 @@
-const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
+export const API_BASE = (import.meta.env.VITE_API_BASE_URL || "/api").replace(/\/$/, "");
+
+function apiPath(path) {
+  if (API_BASE === "/api" && path.startsWith("/api/")) {
+    return path.slice(4);
+  }
+  return path;
+}
 
 async function request(path, options = {}) {
-  const response = await fetch(`${API_BASE}${path}`, {
-    headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+  const response = await fetch(`${API_BASE}${apiPath(path)}`, {
+    headers: options.body instanceof FormData ? options.headers : { "Content-Type": "application/json", ...(options.headers || {}) },
     ...options,
   });
   if (!response.ok) {
@@ -18,6 +25,7 @@ export const api = {
   candidates: () => request("/api/candidates"),
   jobs: () => request("/api/jobs"),
   createCandidate: (payload) => request("/api/resumes/text", { method: "POST", body: JSON.stringify(payload) }),
+  uploadResume: (formData) => request("/api/resumes/upload", { method: "POST", body: formData }),
   createJob: (payload) => request("/api/jobs/create", { method: "POST", body: JSON.stringify(payload) }),
   rank: (jobId) => request(`/api/jobs/${jobId}/rank-candidates`),
   analytics: (jobId) => request(`/api/analytics/job/${jobId}`),
@@ -31,5 +39,7 @@ export const api = {
     request("/api/chat/hr", {
       method: "POST",
       body: JSON.stringify({ question, job_id: jobId ? Number(jobId) : null }),
-    }),
+  }),
+  experiment: () => request("/api/model/experiment"),
+  reportUrl: (jobId, format = "csv") => `${API_BASE}${apiPath(`/api/reports/job/${jobId}?format=${format}`)}`,
 };

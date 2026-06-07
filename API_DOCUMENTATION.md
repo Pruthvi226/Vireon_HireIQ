@@ -6,6 +6,8 @@ Base URL: `http://localhost:8000`
 
 `GET /health`
 
+`GET /api/health`
+
 Returns backend and database status.
 
 ## Demo Seed

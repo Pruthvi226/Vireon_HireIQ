@@ -1,4 +1,4 @@
-version: "3.9"
+name: vireon-hireiq
 
 services:
   backend:
@@ -6,11 +6,24 @@ services:
     container_name: vireon-hireiq-api
     environment:
       VIREON_DATA_DIR: /app/storage
-      CORS_ALLOWED_ORIGINS: http://localhost:5173,http://127.0.0.1:5173
+      CORS_ALLOWED_ORIGINS: http://localhost:5173,http://127.0.0.1:5173,http://localhost:8080,http://127.0.0.1:8080
     ports:
       - "8000:8000"
     volumes:
       - vireon_data:/app/storage
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health').read()"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+
+  frontend:
+    build: ./frontend
+    container_name: vireon-hireiq-web
+    depends_on:
+      - backend
+    ports:
+      - "8080:80"
 
 volumes:
   vireon_data:

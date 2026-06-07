@@ -23,9 +23,14 @@ APP_NAME = "Vireon HireIQ"
 ROOT = Path(__file__).resolve().parents[1]
 load_dotenv(ROOT / ".env")
 DEFAULT_DATA_DIR = Path("C:/tmp/vireon-hireiq") if os.name == "nt" else ROOT / "storage"
-DATA_DIR = Path(os.getenv("VIREON_DATA_DIR") or DEFAULT_DATA_DIR)
+DATABASE_URL = os.getenv("DATABASE_URL", "")
+if DATABASE_URL.startswith("sqlite:///"):
+    DB_PATH = Path(DATABASE_URL.replace("sqlite:///", "", 1))
+    DATA_DIR = DB_PATH.parent
+else:
+    DATA_DIR = Path(os.getenv("VIREON_DATA_DIR") or DEFAULT_DATA_DIR)
+    DB_PATH = DATA_DIR / "vireon_hireiq.sqlite"
 RESUME_DIR = DATA_DIR / "resumes"
-DB_PATH = DATA_DIR / "vireon_hireiq.sqlite"
 
 SKILLS = {
     "Python": ["python"],
@@ -176,6 +181,11 @@ def init_db() -> None:
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok", "system": APP_NAME, "database": str(DB_PATH)}
+
+
+@app.get("/api/health")
+def api_health() -> dict:
+    return health()
 
 
 @app.post("/api/demo/seed")

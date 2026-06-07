@@ -2,6 +2,25 @@
 
 ## Recommended Upgrades
 
+## Deployable MVP
+
+This repo includes production-oriented Docker packaging:
+
+- `backend/Dockerfile` runs FastAPI with Uvicorn.
+- `frontend/Dockerfile` builds React and serves it with Nginx.
+- `frontend/nginx.conf` serves the SPA and proxies `/api/*` to the backend container.
+- `docker-compose.yml` starts both services and persists SQLite data in a Docker volume.
+
+Run:
+
+```bash
+docker compose up --build
+```
+
+Open `http://localhost:8080`.
+
+## Recommended Upgrades
+
 - Move from SQLite to PostgreSQL.
 - Add recruiter authentication and role-based access control.
 - Move resume parsing into background jobs with Redis and Celery.
