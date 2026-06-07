@@ -1,17 +1,16 @@
 version: "3.9"
+
 services:
-  mysql:
-    image: mysql:8.4
-    container_name: ai-interview-mysql
-    restart: unless-stopped
+  backend:
+    build: ./backend
+    container_name: vireon-hireiq-api
     environment:
-      MYSQL_ROOT_PASSWORD: password
-      MYSQL_DATABASE: ai_interview_coach
+      VIREON_DATA_DIR: /app/storage
+      CORS_ALLOWED_ORIGINS: http://localhost:5173,http://127.0.0.1:5173
     ports:
-      - "3306:3306"
+      - "8000:8000"
     volumes:
-      - mysql_data:/var/lib/mysql
-      - ./database/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      - vireon_data:/app/storage
 
 volumes:
-  mysql_data:
+  vireon_data:

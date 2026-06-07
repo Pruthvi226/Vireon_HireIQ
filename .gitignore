@@ -3,6 +3,7 @@ dist/
 target/
 __pycache__/
 *.py[cod]
+*.log
 .venv/
 venv/
 .env

@@ -1,72 +1,62 @@
-CREATE DATABASE IF NOT EXISTS ai_interview_coach;
-USE ai_interview_coach;
-
-CREATE TABLE users (
-    id BIGINT PRIMARY KEY AUTO_INCREMENT,
-    name VARCHAR(120) NOT NULL,
-    email VARCHAR(190) NOT NULL UNIQUE,
-    password_hash VARCHAR(255) NOT NULL,
-    role VARCHAR(100) NOT NULL,
-    experience_level VARCHAR(50) NOT NULL,
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+CREATE TABLE IF NOT EXISTS candidates (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  email TEXT,
+  phone TEXT,
+  links_json TEXT NOT NULL,
+  education_json TEXT NOT NULL,
+  skills_json TEXT NOT NULL,
+  projects_json TEXT NOT NULL,
+  experience_json TEXT NOT NULL,
+  certifications_json TEXT NOT NULL,
+  resume_text TEXT NOT NULL,
+  resume_file_path TEXT,
+  created_at TEXT NOT NULL
 );
 
-CREATE TABLE interviews (
-    id BIGINT PRIMARY KEY AUTO_INCREMENT,
-    user_id BIGINT NOT NULL,
-    role VARCHAR(100) NOT NULL,
-    interview_type ENUM('HR', 'TECHNICAL', 'BEHAVIORAL') NOT NULL,
-    interviewer_mode ENUM('STRICT', 'FRIENDLY', 'STRESS') NOT NULL,
-    score DECIMAL(5,2),
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT fk_interviews_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+CREATE TABLE IF NOT EXISTS jobs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  title TEXT NOT NULL,
+  company TEXT,
+  description TEXT NOT NULL,
+  required_skills_json TEXT NOT NULL,
+  responsibilities_json TEXT NOT NULL,
+  tools_json TEXT NOT NULL,
+  skill_weightage_json TEXT NOT NULL,
+  level TEXT NOT NULL,
+  domain TEXT NOT NULL,
+  jd_quality_score REAL NOT NULL,
+  created_at TEXT NOT NULL
 );
 
-CREATE TABLE questions (
-    id BIGINT PRIMARY KEY AUTO_INCREMENT,
-    interview_id BIGINT NOT NULL,
-    question_text TEXT NOT NULL,
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT fk_questions_interview FOREIGN KEY (interview_id) REFERENCES interviews(id) ON DELETE CASCADE
+CREATE TABLE IF NOT EXISTS match_results (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  candidate_id INTEGER NOT NULL,
+  job_id INTEGER NOT NULL,
+  semantic_score REAL NOT NULL,
+  skill_score REAL NOT NULL,
+  project_score REAL NOT NULL,
+  experience_score REAL NOT NULL,
+  keyword_score REAL NOT NULL,
+  education_score REAL NOT NULL,
+  final_score REAL NOT NULL,
+  shortlist_probability REAL NOT NULL,
+  status TEXT NOT NULL,
+  matched_skills_json TEXT NOT NULL,
+  partial_skills_json TEXT NOT NULL,
+  missing_skills_json TEXT NOT NULL,
+  explanation TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE(candidate_id, job_id)
 );
 
-CREATE TABLE answers (
-    id BIGINT PRIMARY KEY AUTO_INCREMENT,
-    question_id BIGINT NOT NULL,
-    answer_text TEXT,
-    audio_url VARCHAR(500),
-    ai_score DECIMAL(4,2),
-    feedback_text TEXT,
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT fk_answers_question FOREIGN KEY (question_id) REFERENCES questions(id) ON DELETE CASCADE
+CREATE TABLE IF NOT EXISTS model_experiments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  model_name TEXT NOT NULL,
+  accuracy REAL NOT NULL,
+  precision REAL NOT NULL,
+  recall REAL NOT NULL,
+  f1_score REAL NOT NULL,
+  parameters_json TEXT NOT NULL,
+  created_at TEXT NOT NULL
 );
-
-CREATE TABLE feedbacks (
-    id BIGINT PRIMARY KEY AUTO_INCREMENT,
-    interview_id BIGINT NOT NULL UNIQUE,
-    overall_score DECIMAL(5,2) NOT NULL,
-    communication_score DECIMAL(5,2) NOT NULL,
-    technical_score DECIMAL(5,2) NOT NULL,
-    confidence_score DECIMAL(5,2) NOT NULL,
-    strengths TEXT,
-    weaknesses TEXT,
-    suggestions TEXT,
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT fk_feedbacks_interview FOREIGN KEY (interview_id) REFERENCES interviews(id) ON DELETE CASCADE
-);
-
-CREATE TABLE resumes (
-    id BIGINT PRIMARY KEY AUTO_INCREMENT,
-    user_id BIGINT NOT NULL,
-    file_url VARCHAR(500) NOT NULL,
-    extracted_text LONGTEXT,
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT fk_resumes_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-);
-
-CREATE INDEX idx_users_email ON users(email);
-CREATE INDEX idx_interviews_user_created ON interviews(user_id, created_at DESC);
-CREATE INDEX idx_questions_interview ON questions(interview_id);
-CREATE INDEX idx_answers_question ON answers(question_id);
-CREATE INDEX idx_feedbacks_interview ON feedbacks(interview_id);
-CREATE INDEX idx_resumes_user_created ON resumes(user_id, created_at DESC);
