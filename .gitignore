@@ -1,0 +1,15 @@
+node_modules/
+dist/
+target/
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+*.db
+*.sqlite
+storage/
+reports/
+.pytest_cache/
+.mypy_cache/
+.DS_Store

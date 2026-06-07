@@ -1,0 +1,16 @@
+# MySQL — activate with: SPRING_PROFILES_ACTIVE=mysql
+# Or: mvn spring-boot:run -Dspring-boot.run.profiles=mysql
+# Put DB credentials in backend/.env (loaded before binding) or use env vars.
+spring:
+  datasource:
+    url: ${DB_URL:jdbc:mysql://localhost:3306/ai_interview_coach?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC}
+    username: ${DB_USERNAME:root}
+    password: ${DB_PASSWORD:password}
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.MySQLDialect
+        format_sql: true
+    open-in-view: false
