@@ -502,7 +502,7 @@ def score_match(candidate: dict, job: dict, bias_safe: bool = True) -> dict:
     keyword_score = sum(1 for word in keyword_pool if word.lower() in resume_text.lower()) / max(1, len(keyword_pool)) * 100
     education_score = min(100, 20 + sum(15 for key in ["computer", "data", "ai", "machine", "software", "certification", "course"] if key in " ".join(candidate["education"] + candidate["certifications"]).lower()))
     final = 0.35 * semantic + 0.25 * skill_score + 0.15 * project_score + 0.10 * experience_score + 0.10 * keyword_score + 0.05 * education_score
-    status = "Strong Match" if final >= 78 else "Maybe" if final >= 58 else "Reject"
+    status = "Strong Match" if final >= 75 else "Maybe" if final >= 58 else "Reject"
     probability = 1 / (1 + math.exp(-0.09 * (final - 58))) * 100
     explanation = (
         f"{candidate['name']} is a {status.lower()} for {job['title']}. Strong evidence: "
@@ -754,7 +754,7 @@ def quality_score(text: str, skills: list[str], responsibilities: list[str]) -> 
         bool(responsibilities),
         len(text.split()) >= 60,
         bool(re.search(r"\b(duration|month|stipend|salary|remote|onsite|hybrid)\b", text, re.I)),
-        bool(re.search(r"\b(evaluate|metric|accuracy|deliverable|report|documentation)\b", text, re.I)),
+        bool(re.search(r"\b(evaluate|metric|metrics|accuracy|deliverable|deliverables|report|reports|documentation)\b", text, re.I)),
     ]
     return round(sum(checks) / len(checks) * 100, 1)
 
