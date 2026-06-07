@@ -12,17 +12,21 @@ from io import StringIO
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 
+from auth.auth_routes import router as auth_router
+from auth.auth_service import init_auth_db, list_users, seed_demo_users
+from auth.dependencies import get_current_user, require_roles
+
 
 APP_NAME = "Vireon HireIQ"
 ROOT = Path(__file__).resolve().parents[1]
 load_dotenv(ROOT / ".env")
-DEFAULT_DATA_DIR = Path("C:/tmp/vireon-hireiq") if os.name == "nt" else ROOT / "storage"
+DEFAULT_DATA_DIR = ROOT / "runtime"
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 if DATABASE_URL.startswith("sqlite:///"):
     DB_PATH = Path(DATABASE_URL.replace("sqlite:///", "", 1))
@@ -85,6 +89,7 @@ class ChatRequest(BaseModel):
 
 
 app = FastAPI(title=f"{APP_NAME} API", version="1.0.0")
+app.include_router(auth_router)
 origins = [item.strip() for item in os.getenv("CORS_ALLOWED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(",")]
 app.add_middleware(
     CORSMiddleware,
@@ -104,6 +109,8 @@ def connect() -> sqlite3.Connection:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     RESUME_DIR.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
+    conn.execute("PRAGMA journal_mode=MEMORY")
+    conn.execute("PRAGMA synchronous=NORMAL")
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -125,6 +132,7 @@ def init_db() -> None:
               certifications_json TEXT NOT NULL,
               resume_text TEXT NOT NULL,
               resume_file_path TEXT,
+              owner_user_id INTEGER,
               created_at TEXT NOT NULL
             );
 
@@ -176,6 +184,11 @@ def init_db() -> None:
             );
             """
         )
+        columns = {row["name"] for row in db.execute("PRAGMA table_info(candidates)").fetchall()}
+        if "owner_user_id" not in columns:
+            db.execute("ALTER TABLE candidates ADD COLUMN owner_user_id INTEGER")
+        db.commit()
+    init_auth_db()
 
 
 @app.get("/health")
@@ -232,19 +245,27 @@ def seed_demo() -> dict:
                 create_candidate_record(db, parse_resume(resume))
         ensure_experiment(db)
         job_id = db.execute("SELECT id FROM jobs ORDER BY id LIMIT 1").fetchone()["id"]
-    rankings = rank_candidates(job_id)
+    seed_demo_users()
+    rankings = rank_candidates_internal(job_id)
     return {"message": "Demo data ready", "job_id": job_id, "ranked": rankings}
 
 
+@app.post("/api/demo/seed-users")
+def seed_users() -> dict:
+    init_auth_db()
+    return seed_demo_users()
+
+
 @app.post("/api/resumes/text")
-def create_candidate(payload: ResumeTextRequest) -> dict:
+def create_candidate(payload: ResumeTextRequest, user: dict = Depends(require_roles("RECRUITER", "CANDIDATE", "ADMIN"))) -> dict:
     parsed = parse_resume(payload.resume_text, payload.name)
+    parsed["owner_user_id"] = user["id"] if user["role"] == "CANDIDATE" else None
     with connect() as db:
         return create_candidate_record(db, parsed)
 
 
 @app.post("/api/resumes/upload")
-async def upload_resume(request: Request) -> dict:
+async def upload_resume(request: Request, user: dict = Depends(require_roles("RECRUITER", "CANDIDATE", "ADMIN"))) -> dict:
     form = await request.form()
     file = form.get("file")
     if not file or not hasattr(file, "read"):
@@ -257,31 +278,32 @@ async def upload_resume(request: Request) -> dict:
     text = extract_file_text(raw, getattr(file, "filename", "") or "")
     parsed = parse_resume(text, candidate_name)
     parsed["resume_file_path"] = str(path)
+    parsed["owner_user_id"] = user["id"] if user["role"] == "CANDIDATE" else None
     with connect() as db:
         return create_candidate_record(db, parsed)
 
 
 @app.get("/api/candidates")
-def candidates() -> list[dict]:
+def candidates(user: dict = Depends(require_roles("ADMIN", "RECRUITER"))) -> list[dict]:
     with connect() as db:
         return [candidate_out(row) for row in db.execute("SELECT * FROM candidates ORDER BY created_at DESC").fetchall()]
 
 
 @app.get("/api/jobs")
-def jobs() -> list[dict]:
+def jobs(user: dict = Depends(get_current_user)) -> list[dict]:
     with connect() as db:
         return [job_out(row) for row in db.execute("SELECT * FROM jobs ORDER BY created_at DESC").fetchall()]
 
 
 @app.post("/api/jobs/create")
-def create_job(payload: JobCreateRequest) -> dict:
+def create_job(payload: JobCreateRequest, user: dict = Depends(require_roles("RECRUITER", "ADMIN"))) -> dict:
     parsed = parse_jd(payload.description, payload.title, payload.company)
     with connect() as db:
         return create_job_record(db, parsed)
 
 
 @app.post("/api/match/candidate")
-def match_candidate(payload: MatchRequest) -> dict:
+def match_candidate(payload: MatchRequest, user: dict = Depends(require_roles("RECRUITER", "ADMIN"))) -> dict:
     with connect() as db:
         candidate = get_candidate_row(db, payload.candidate_id)
         job = get_job_row(db, payload.job_id)
@@ -289,7 +311,11 @@ def match_candidate(payload: MatchRequest) -> dict:
 
 
 @app.get("/api/jobs/{job_id}/rank-candidates")
-def rank_candidates(job_id: int) -> list[dict]:
+def rank_candidates(job_id: int, user: dict = Depends(require_roles("RECRUITER", "ADMIN"))) -> list[dict]:
+    return rank_candidates_internal(job_id)
+
+
+def rank_candidates_internal(job_id: int) -> list[dict]:
     with connect() as db:
         job = get_job_row(db, job_id)
         rows = []
@@ -299,9 +325,13 @@ def rank_candidates(job_id: int) -> list[dict]:
 
 
 @app.get("/api/candidates/{candidate_id}/skill-gap/{job_id}")
-def skill_gap(candidate_id: int, job_id: int) -> dict:
+def skill_gap(candidate_id: int, job_id: int, user: dict = Depends(require_roles("RECRUITER", "ADMIN"))) -> dict:
     with connect() as db:
         match = score_match(candidate_out(get_candidate_row(db, candidate_id)), job_out(get_job_row(db, job_id)), True)
+    return build_skill_gap_response(match)
+
+
+def build_skill_gap_response(match: dict) -> dict:
     roadmap = [
         {"week": i + 1, "skill": skill, "action": f"Build a role-specific artifact proving {skill} and add metrics."}
         for i, skill in enumerate(match["missing_skills"][:6])
@@ -315,7 +345,7 @@ def skill_gap(candidate_id: int, job_id: int) -> dict:
 
 
 @app.post("/api/interview/generate")
-def interview(payload: InterviewRequest) -> dict:
+def interview(payload: InterviewRequest, user: dict = Depends(require_roles("RECRUITER", "ADMIN"))) -> dict:
     with connect() as db:
         candidate = candidate_out(get_candidate_row(db, payload.candidate_id))
         job = job_out(get_job_row(db, payload.job_id))
@@ -335,8 +365,8 @@ def interview(payload: InterviewRequest) -> dict:
 
 
 @app.get("/api/analytics/job/{job_id}")
-def analytics(job_id: int) -> dict:
-    rankings = rank_candidates(job_id)
+def analytics(job_id: int, user: dict = Depends(require_roles("RECRUITER", "ADMIN"))) -> dict:
+    rankings = rank_candidates_internal(job_id)
     missing = Counter(skill for row in rankings for skill in row["missing_skills"])
     status = Counter(row["status"] for row in rankings)
     avg = round(sum(row["final_score"] for row in rankings) / max(1, len(rankings)), 1)
@@ -353,7 +383,7 @@ def analytics(job_id: int) -> dict:
 
 
 @app.post("/api/chat/hr")
-def hr_chat(payload: ChatRequest) -> dict:
+def hr_chat(payload: ChatRequest, user: dict = Depends(require_roles("RECRUITER", "ADMIN"))) -> dict:
     with connect() as db:
         docs = []
         for row in db.execute("SELECT * FROM candidates").fetchall():
@@ -380,8 +410,8 @@ def hr_chat(payload: ChatRequest) -> dict:
 
 
 @app.get("/api/reports/job/{job_id}")
-def report(job_id: int, format: str = Query("json", pattern="^(json|csv)$")):
-    rows = rank_candidates(job_id)
+def report(job_id: int, format: str = Query("json", pattern="^(json|csv)$"), user: dict = Depends(require_roles("RECRUITER", "ADMIN"))):
+    rows = rank_candidates_internal(job_id)
     if format == "json":
         return {"job_id": job_id, "rows": rows}
     output = StringIO()
@@ -403,7 +433,7 @@ def report(job_id: int, format: str = Query("json", pattern="^(json|csv)$")):
 
 
 @app.get("/api/model/experiment")
-def model_experiment() -> dict:
+def model_experiment(user: dict = Depends(require_roles("ADMIN", "RECRUITER"))) -> dict:
     return {
         "model_name": "HybridScoreCalibratedShortlistBaseline",
         "accuracy": 0.86,
@@ -412,6 +442,111 @@ def model_experiment() -> dict:
         "f1_score": 0.84,
         "features": ["semantic_score", "skill_score", "project_score", "experience_score", "keyword_score", "education_score", "final_score"],
     }
+
+
+@app.get("/api/admin/users")
+def admin_users(user: dict = Depends(require_roles("ADMIN"))) -> list[dict]:
+    return list_users()
+
+
+@app.get("/api/admin/candidates")
+def admin_candidates(user: dict = Depends(require_roles("ADMIN"))) -> list[dict]:
+    with connect() as db:
+        return [candidate_out(row) for row in db.execute("SELECT * FROM candidates ORDER BY created_at DESC").fetchall()]
+
+
+@app.get("/api/admin/jobs")
+def admin_jobs(user: dict = Depends(require_roles("ADMIN"))) -> list[dict]:
+    with connect() as db:
+        return [job_out(row) for row in db.execute("SELECT * FROM jobs ORDER BY created_at DESC").fetchall()]
+
+
+@app.get("/api/admin/analytics")
+def admin_analytics(user: dict = Depends(require_roles("ADMIN"))) -> dict:
+    with connect() as db:
+        jobs_rows = db.execute("SELECT * FROM jobs ORDER BY created_at DESC").fetchall()
+        candidate_count = db.execute("SELECT COUNT(*) AS c FROM candidates").fetchone()["c"]
+        match_count = db.execute("SELECT COUNT(*) AS c FROM match_results").fetchone()["c"]
+    job_summaries = []
+    for row in jobs_rows[:10]:
+        rankings = rank_candidates_internal(row["id"])
+        avg = round(sum(item["final_score"] for item in rankings) / max(1, len(rankings)), 1)
+        job_summaries.append({"job_id": row["id"], "title": row["title"], "candidates": len(rankings), "average_score": avg})
+    return {"users": len(list_users()), "candidates": candidate_count, "jobs": len(jobs_rows), "matches": match_count, "job_summaries": job_summaries}
+
+
+@app.get("/api/admin/platform-data")
+def admin_platform_data(user: dict = Depends(require_roles("ADMIN"))) -> dict:
+    with connect() as db:
+        return {
+            "database": str(DB_PATH),
+            "users": db.execute("SELECT COUNT(*) AS c FROM users").fetchone()["c"],
+            "candidates": db.execute("SELECT COUNT(*) AS c FROM candidates").fetchone()["c"],
+            "jobs": db.execute("SELECT COUNT(*) AS c FROM jobs").fetchone()["c"],
+            "matches": db.execute("SELECT COUNT(*) AS c FROM match_results").fetchone()["c"],
+        }
+
+
+@app.get("/api/recruiter/dashboard")
+def recruiter_dashboard(user: dict = Depends(require_roles("RECRUITER", "ADMIN"))) -> dict:
+    with connect() as db:
+        candidate_count = db.execute("SELECT COUNT(*) AS c FROM candidates").fetchone()["c"]
+        jobs_rows = db.execute("SELECT * FROM jobs ORDER BY created_at DESC").fetchall()
+    latest_job = job_out(jobs_rows[0]) if jobs_rows else None
+    return {"recruiter": user, "candidate_count": candidate_count, "job_count": len(jobs_rows), "latest_job": latest_job}
+
+
+@app.get("/api/recruiter/jobs")
+def recruiter_jobs(user: dict = Depends(require_roles("RECRUITER", "ADMIN"))) -> list[dict]:
+    return jobs(user)
+
+
+@app.get("/api/recruiter/candidates")
+def recruiter_candidates(user: dict = Depends(require_roles("RECRUITER", "ADMIN"))) -> list[dict]:
+    return candidates(user)
+
+
+@app.get("/api/recruiter/analytics/{job_id}")
+def recruiter_analytics(job_id: int, user: dict = Depends(require_roles("RECRUITER", "ADMIN"))) -> dict:
+    return analytics(job_id, user)
+
+
+@app.get("/api/candidate/profile")
+def candidate_profile(user: dict = Depends(require_roles("CANDIDATE", "ADMIN"))) -> dict:
+    with connect() as db:
+        rows = db.execute("SELECT * FROM candidates WHERE owner_user_id=? ORDER BY created_at DESC", (user["id"],)).fetchall()
+    return {"user": user, "resumes": [candidate_out(row) for row in rows]}
+
+
+@app.get("/api/candidate/ats-score")
+def candidate_ats_score(
+    job_id: int,
+    candidate_id: int | None = None,
+    user: dict = Depends(require_roles("CANDIDATE", "ADMIN")),
+) -> dict:
+    with connect() as db:
+        candidate = get_owned_candidate_row(db, user, candidate_id)
+        job = get_job_row(db, job_id)
+        match = score_match(candidate_out(candidate), job_out(job), True)
+    return {"candidate": candidate_out(candidate), "job": job_out(job), "ats_score": match["final_score"], "status": match["status"], "match": match}
+
+
+@app.get("/api/candidate/skill-gap/{job_id}")
+def candidate_skill_gap(job_id: int, candidate_id: int | None = None, user: dict = Depends(require_roles("CANDIDATE", "ADMIN"))) -> dict:
+    with connect() as db:
+        candidate = get_owned_candidate_row(db, user, candidate_id)
+        job = get_job_row(db, job_id)
+        match = score_match(candidate_out(candidate), job_out(job), True)
+    return build_skill_gap_response(match)
+
+
+@app.get("/api/candidate/resume-improvement/{job_id}")
+def candidate_resume_improvement(job_id: int, candidate_id: int | None = None, user: dict = Depends(require_roles("CANDIDATE", "ADMIN"))) -> dict:
+    gap = candidate_skill_gap(job_id, candidate_id, user)
+    suggestions = [f"Add measurable project evidence for {skill}." for skill in gap["missing_skills"][:6]]
+    if not suggestions:
+        suggestions = ["Your resume aligns well. Add more metrics, links, and concrete outcomes to strengthen recruiter trust."]
+    return {"missing_skills": gap["missing_skills"], "suggestions": suggestions, "roadmap": gap["roadmap"]}
 
 
 def extract_file_text(raw: bytes, filename: str) -> str:
@@ -575,8 +710,8 @@ def create_candidate_record(db: sqlite3.Connection, parsed: dict) -> dict:
         """
         INSERT INTO candidates (
           name, email, phone, links_json, education_json, skills_json, projects_json, experience_json,
-          certifications_json, resume_text, resume_file_path, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          certifications_json, resume_text, resume_file_path, owner_user_id, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             parsed["name"],
@@ -590,6 +725,7 @@ def create_candidate_record(db: sqlite3.Connection, parsed: dict) -> dict:
             dump(parsed["certifications"]),
             parsed["resume_text"],
             parsed.get("resume_file_path"),
+            parsed.get("owner_user_id"),
             datetime.utcnow().isoformat(),
         ),
     )
@@ -647,6 +783,7 @@ def candidate_out(row: sqlite3.Row) -> dict:
         "certifications": load(row["certifications_json"], []),
         "resume_text": row["resume_text"],
         "resume_file_path": row["resume_file_path"],
+        "owner_user_id": row["owner_user_id"] if "owner_user_id" in row.keys() else None,
         "created_at": row["created_at"],
     }
 
@@ -679,6 +816,18 @@ def get_job_row(db: sqlite3.Connection, job_id: int) -> sqlite3.Row:
     row = db.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Job not found")
+    return row
+
+
+def get_owned_candidate_row(db: sqlite3.Connection, user: dict, candidate_id: int | None = None) -> sqlite3.Row:
+    if user["role"] == "ADMIN" and candidate_id:
+        return get_candidate_row(db, candidate_id)
+    if candidate_id:
+        row = db.execute("SELECT * FROM candidates WHERE id=? AND owner_user_id=?", (candidate_id, user["id"])).fetchone()
+    else:
+        row = db.execute("SELECT * FROM candidates WHERE owner_user_id=? ORDER BY created_at DESC LIMIT 1", (user["id"],)).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Upload your resume before requesting candidate insights")
     return row
 
 

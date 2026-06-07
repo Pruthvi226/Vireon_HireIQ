@@ -1069,6 +1069,238 @@ textarea:disabled {
   margin-top: 4px;
 }
 
+/* Authentication and role dashboards */
+.auth-page {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 32px;
+  background:
+    radial-gradient(circle at top left, rgba(20, 184, 166, 0.22), transparent 34%),
+    radial-gradient(circle at bottom right, rgba(249, 115, 22, 0.14), transparent 30%),
+    linear-gradient(145deg, #0c1110, #161d1a 52%, #111614);
+}
+
+.auth-card {
+  width: min(100%, 480px);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(16, 22, 20, 0.74);
+  backdrop-filter: blur(20px);
+  border-radius: 8px;
+  box-shadow: var(--shadow-lg);
+  padding: 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.auth-card-compact {
+  text-align: center;
+  align-items: center;
+}
+
+.auth-brand {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.auth-brand h1 {
+  font-size: 28px;
+  line-height: 1.1;
+}
+
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.auth-form h2 {
+  font-size: 22px;
+  margin-bottom: 4px;
+}
+
+.auth-form p,
+.auth-switch,
+.auth-card-compact p {
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+.auth-switch {
+  text-align: center;
+}
+
+.auth-switch a {
+  color: var(--primary);
+  font-weight: 700;
+}
+
+.auth-actions,
+.role-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.demo-strip {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.demo-pill {
+  border: 1px solid var(--border-color);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-main);
+  border-radius: 8px;
+  padding: 10px;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.demo-pill:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.role-shell {
+  min-height: 100vh;
+  padding: 40px 48px;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+  max-width: 1440px;
+  margin: 0 auto;
+}
+
+.role-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding-bottom: 24px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.role-topbar h1 {
+  font-size: clamp(28px, 4vw, 44px);
+  margin: 4px 0;
+}
+
+.role-topbar p {
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+.user-chip {
+  border: 1px solid var(--border-color);
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 8px;
+  padding: 10px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.user-avatar {
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  background: var(--primary);
+  color: #ffffff;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.user-chip strong {
+  display: block;
+  font-size: 13px;
+}
+
+.user-chip p {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  font-weight: 700;
+}
+
+.data-table {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.table-row {
+  border: 1px solid var(--border-color);
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: 8px;
+  padding: 12px 14px;
+  display: grid;
+  grid-template-columns: minmax(160px, 1.2fr) minmax(160px, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.table-row strong {
+  color: var(--text-main);
+}
+
+.platform-grid {
+  display: grid;
+  grid-template-columns: 180px 1fr;
+  gap: 14px;
+  align-items: center;
+  color: var(--text-muted);
+}
+
+.platform-grid code {
+  color: var(--text-main);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 10px 12px;
+  word-break: break-all;
+}
+
+.score-card {
+  margin-top: 18px;
+  border: 1px solid var(--border-color);
+  background: rgba(20, 184, 166, 0.08);
+  border-radius: 8px;
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.score-card strong {
+  font-size: 42px;
+  line-height: 1;
+  color: var(--primary);
+}
+
+.score-card span {
+  font-weight: 800;
+  color: var(--text-main);
+}
+
+.score-card p,
+.empty-copy {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.w-full {
+  width: 100%;
+}
+
 /* Responsive breakdowns */
 @media (max-width: 1080px) {
   .app-shell {
@@ -1098,6 +1330,20 @@ textarea:disabled {
   .grid-3col {
     grid-template-columns: 1fr;
     gap: 16px;
+  }
+
+  .role-shell {
+    padding: 24px;
+  }
+
+  .role-topbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .table-row,
+  .platform-grid {
+    grid-template-columns: 1fr;
   }
 }
 

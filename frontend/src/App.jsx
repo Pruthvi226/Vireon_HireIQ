@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "./api";
+import { useAuth } from "./auth/AuthContext";
 import { motion, AnimatePresence } from "framer-motion";
 
 const sampleResume = `Pruthvi Raj Panduga
@@ -13,6 +14,7 @@ const sampleJob = `Artificial Intelligence Intern
 QuickHyre AI builds ATS and HRMS automation for recruiters. Design and train AI/ML models, preprocess resume and job data, build NLP matching APIs, evaluate model accuracy, document experiments and create hiring dashboards. Skills: Python, FastAPI, Machine Learning, NLP, Scikit-learn, Pandas, FAISS, Gemini API, visualization, model evaluation. Internship duration 6 months with recruiter reports.`;
 
 function App() {
+  const { user, logout } = useAuth();
   const [candidates, setCandidates] = useState([]);
   const [jobs, setJobs] = useState([]);
   const [rankings, setRankings] = useState([]);
@@ -224,6 +226,23 @@ function App() {
     });
   }
 
+  async function downloadReport() {
+    if (!selectedJobId) return;
+    await run("report", async () => {
+      const csv = await api.reportCsv(selectedJobId);
+      const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `vireon-job-${selectedJobId}.csv`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      setSuccessMsg("CSV report exported.");
+    });
+  }
+
   return (
     <main className="app-shell">
       {/* Sidebar Navigation */}
@@ -316,6 +335,15 @@ function App() {
         </div>
 
         <div className="sidebar-footer">
+          {user && (
+            <div className="user-chip">
+              <span className="user-avatar">{user.name?.slice(0, 1) || "U"}</span>
+              <div>
+                <strong>{user.name}</strong>
+                <p>{user.role}</p>
+              </div>
+            </div>
+          )}
           <button className="btn btn-secondary w-full" onClick={seed} disabled={loading} id="btn-seed-demo">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{marginRight: "6px"}}>
               <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" />
@@ -350,6 +378,9 @@ function App() {
               )}
             </button>
           </div>
+          <button className="btn btn-outline w-full" onClick={logout} id="btn-logout">
+            Logout
+          </button>
         </div>
       </aside>
 
@@ -398,16 +429,17 @@ function App() {
             )}
 
             {selectedJobId > 0 && (
-              <a
-                href={api.reportUrl(selectedJobId)}
+              <button
+                type="button"
                 className="btn btn-secondary"
+                onClick={downloadReport}
                 id="link-csv-report"
               >
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                   <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />
                 </svg>
                 CSV Export
-              </a>
+              </button>
             )}
           </div>
         </header>
