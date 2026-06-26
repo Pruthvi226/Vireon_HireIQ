@@ -1,20 +1,25 @@
 from __future__ import annotations
 
 import csv
+import copy
+import contextvars
 import json
 import math
 import os
 import re
 import sqlite3
-from collections import Counter
+import time
+import uuid
+from collections import Counter, deque
 from datetime import datetime
 from io import StringIO
 from pathlib import Path
+from threading import Lock
 from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 
@@ -24,6 +29,7 @@ from auth.dependencies import get_current_user, require_roles
 
 
 APP_NAME = "Vireon HireIQ"
+SERVICE_VERSION = "2.0.0"
 ROOT = Path(__file__).resolve().parents[1]
 load_dotenv(ROOT / ".env")
 DEFAULT_DATA_DIR = ROOT / "runtime"
@@ -35,6 +41,21 @@ else:
     DATA_DIR = Path(os.getenv("VIREON_DATA_DIR") or DEFAULT_DATA_DIR)
     DB_PATH = DATA_DIR / "vireon_hireiq.sqlite"
 RESUME_DIR = DATA_DIR / "resumes"
+MAX_RESUME_BYTES = int(os.getenv("MAX_RESUME_BYTES", str(5 * 1024 * 1024)))
+CACHE_TTL_SECONDS = int(os.getenv("VIREON_CACHE_TTL_SECONDS", "60"))
+RATE_LIMIT_PER_MINUTE = int(os.getenv("VIREON_RATE_LIMIT_PER_MINUTE", "240"))
+SQLITE_JOURNAL_MODE = os.getenv("VIREON_SQLITE_JOURNAL_MODE", "MEMORY").upper()
+if SQLITE_JOURNAL_MODE not in {"DELETE", "TRUNCATE", "PERSIST", "MEMORY", "WAL", "OFF"}:
+    SQLITE_JOURNAL_MODE = "MEMORY"
+STARTED_AT = datetime.utcnow()
+REQUEST_ID_CONTEXT: contextvars.ContextVar[str | None] = contextvars.ContextVar("request_id", default=None)
+HTTP_METRICS: Counter[str] = Counter()
+PATH_METRICS: Counter[str] = Counter()
+LATENCY_MS: deque[float] = deque(maxlen=500)
+RATE_BUCKETS: dict[str, deque[float]] = {}
+CACHE: dict[str, dict[str, Any]] = {}
+CACHE_STATS: Counter[str] = Counter({"hits": 0, "misses": 0, "sets": 0, "invalidations": 0})
+RUNTIME_LOCK = Lock()
 
 SKILLS = {
     "Python": ["python"],
@@ -88,7 +109,7 @@ class ChatRequest(BaseModel):
     job_id: int | None = None
 
 
-app = FastAPI(title=f"{APP_NAME} API", version="1.0.0")
+app = FastAPI(title=f"{APP_NAME} API", version=SERVICE_VERSION)
 app.include_router(auth_router)
 origins = [item.strip() for item in os.getenv("CORS_ALLOWED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(",")]
 app.add_middleware(
@@ -100,6 +121,36 @@ app.add_middleware(
 )
 
 
+@app.middleware("http")
+async def platform_middleware(request: Request, call_next):
+    request_id = request.headers.get("x-request-id") or str(uuid.uuid4())
+    token = REQUEST_ID_CONTEXT.set(request_id)
+    start = time.perf_counter()
+    try:
+        retry_after = check_rate_limit(request)
+        if retry_after is not None:
+            latency = (time.perf_counter() - start) * 1000
+            record_http_metric(request, 429, latency)
+            return JSONResponse(
+                status_code=429,
+                content={"detail": "Rate limit exceeded", "request_id": request_id, "retry_after_seconds": retry_after},
+                headers={"X-Request-ID": request_id, "Retry-After": str(retry_after)},
+            )
+
+        response = await call_next(request)
+        latency = (time.perf_counter() - start) * 1000
+        record_http_metric(request, response.status_code, latency)
+        response.headers["X-Request-ID"] = request_id
+        response.headers["X-Process-Time-Ms"] = str(round(latency, 2))
+        return response
+    except Exception:
+        latency = (time.perf_counter() - start) * 1000
+        record_http_metric(request, 500, latency)
+        raise
+    finally:
+        REQUEST_ID_CONTEXT.reset(token)
+
+
 @app.on_event("startup")
 def startup() -> None:
     init_db()
@@ -109,8 +160,15 @@ def connect() -> sqlite3.Connection:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     RESUME_DIR.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
-    conn.execute("PRAGMA journal_mode=MEMORY")
+    try:
+        conn.execute(f"PRAGMA journal_mode={SQLITE_JOURNAL_MODE}")
+    except sqlite3.OperationalError:
+        conn.close()
+        conn = sqlite3.connect(DB_PATH)
+        conn.execute("PRAGMA journal_mode=MEMORY")
     conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute("PRAGMA busy_timeout=5000")
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -182,6 +240,32 @@ def init_db() -> None:
               parameters_json TEXT NOT NULL,
               created_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS audit_logs (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              event_id TEXT NOT NULL UNIQUE,
+              actor_user_id INTEGER,
+              actor_role TEXT,
+              action TEXT NOT NULL,
+              resource_type TEXT NOT NULL,
+              resource_id TEXT,
+              metadata_json TEXT NOT NULL,
+              request_id TEXT,
+              created_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_candidates_owner_created
+              ON candidates(owner_user_id, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_jobs_created
+              ON jobs(created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_match_results_job_score
+              ON match_results(job_id, final_score DESC);
+            CREATE INDEX IF NOT EXISTS idx_match_results_candidate
+              ON match_results(candidate_id);
+            CREATE INDEX IF NOT EXISTS idx_audit_logs_created
+              ON audit_logs(created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_audit_logs_resource
+              ON audit_logs(resource_type, resource_id);
             """
         )
         columns = {row["name"] for row in db.execute("PRAGMA table_info(candidates)").fetchall()}
@@ -193,12 +277,104 @@ def init_db() -> None:
 
 @app.get("/health")
 def health() -> dict:
-    return {"status": "ok", "system": APP_NAME, "database": str(DB_PATH)}
+    return {
+        "status": "ok",
+        "system": APP_NAME,
+        "version": SERVICE_VERSION,
+        "database": str(DB_PATH),
+        "uptime_seconds": uptime_seconds(),
+        "request_id": REQUEST_ID_CONTEXT.get(),
+    }
 
 
 @app.get("/api/health")
 def api_health() -> dict:
     return health()
+
+
+@app.get("/ready")
+def ready() -> dict:
+    return readiness()
+
+
+@app.get("/api/ready")
+def api_ready() -> dict:
+    return readiness()
+
+
+@app.get("/api/system/overview")
+def system_overview(user: dict = Depends(require_roles("ADMIN", "RECRUITER"))) -> dict:
+    with connect() as db:
+        counts = table_counts(db)
+        audit_count = db.execute("SELECT COUNT(*) AS c FROM audit_logs").fetchone()["c"]
+    return {
+        "service": {
+            "name": APP_NAME,
+            "version": SERVICE_VERSION,
+            "environment": os.getenv("APP_ENV") or os.getenv("ENVIRONMENT", "local"),
+            "uptime_seconds": uptime_seconds(),
+            "generated_at": datetime.utcnow().isoformat(),
+        },
+        "readiness": readiness(),
+        "data": {
+            **counts,
+            "audit_events": audit_count,
+            "database_path": str(DB_PATH),
+            "resume_storage": str(RESUME_DIR),
+        },
+        "traffic": http_metrics_snapshot(),
+        "cache": cache_snapshot(),
+        "topology": architecture_topology(),
+        "resilience": {
+            "request_tracing": "Every response includes X-Request-ID and latency headers.",
+            "backpressure": f"In-process rate limit: {RATE_LIMIT_PER_MINUTE} requests/min/client.",
+            "idempotency": "Candidate-job matches use a unique key with upsert semantics.",
+            "auditability": "Decision-impacting workflows append immutable audit events.",
+        },
+        "scale_path": [
+            "React/Nginx scales horizontally behind a CDN or load balancer.",
+            "FastAPI workers stay stateless; shared cache moves from memory to Redis.",
+            "SQLite moves to PostgreSQL with read replicas and managed backups.",
+            "Resume uploads move from local disk to object storage with malware scanning.",
+            "Ranking and parsing move to a queue-backed worker pool for burst control.",
+            "Candidate retrieval moves to pgvector/FAISS with offline embedding refresh.",
+        ],
+        "slo": {
+            "availability_target": "99.9% API availability for recruiter workflows",
+            "latency_target": "p95 under 500 ms for cached reads and under 2 s for ranking demos",
+            "data_safety": "Bias-safe scoring, audit logs, encrypted secrets, and role-scoped access",
+        },
+    }
+
+
+@app.get("/api/system/audit")
+def system_audit(limit: int = Query(20, ge=1, le=100), user: dict = Depends(require_roles("ADMIN"))) -> list[dict]:
+    with connect() as db:
+        rows = db.execute(
+            """
+            SELECT id, event_id, actor_user_id, actor_role, action, resource_type, resource_id,
+                   metadata_json, request_id, created_at
+            FROM audit_logs
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    return [
+        {
+            "id": row["id"],
+            "event_id": row["event_id"],
+            "actor_user_id": row["actor_user_id"],
+            "actor_role": row["actor_role"],
+            "action": row["action"],
+            "resource_type": row["resource_type"],
+            "resource_id": row["resource_id"],
+            "metadata": load(row["metadata_json"], {}),
+            "request_id": row["request_id"],
+            "created_at": row["created_at"],
+        }
+        for row in rows
+    ]
 
 
 @app.post("/api/demo/seed")
@@ -247,6 +423,7 @@ def seed_demo() -> dict:
         job_id = db.execute("SELECT id FROM jobs ORDER BY id LIMIT 1").fetchone()["id"]
     seed_demo_users()
     rankings = rank_candidates_internal(job_id)
+    audit_log(None, "demo_seeded", "demo_dataset", str(job_id), {"ranked_candidates": len(rankings)})
     return {"message": "Demo data ready", "job_id": job_id, "ranked": rankings}
 
 
@@ -261,7 +438,9 @@ def create_candidate(payload: ResumeTextRequest, user: dict = Depends(require_ro
     parsed = parse_resume(payload.resume_text, payload.name)
     parsed["owner_user_id"] = user["id"] if user["role"] == "CANDIDATE" else None
     with connect() as db:
-        return create_candidate_record(db, parsed)
+        candidate = create_candidate_record(db, parsed)
+    audit_log(user, "candidate_created", "candidate", candidate["id"], {"source": "text", "skills": candidate["skills"]})
+    return candidate
 
 
 @app.post("/api/resumes/upload")
@@ -272,6 +451,8 @@ async def upload_resume(request: Request, user: dict = Depends(require_roles("RE
         raise HTTPException(status_code=400, detail="Multipart field 'file' is required")
     candidate_name = form.get("candidate_name")
     raw = await file.read()
+    if len(raw) > MAX_RESUME_BYTES:
+        raise HTTPException(status_code=413, detail=f"Resume upload exceeds {MAX_RESUME_BYTES // (1024 * 1024)} MB limit")
     safe_name = re.sub(r"[^a-zA-Z0-9_.-]+", "_", getattr(file, "filename", None) or "resume.txt")
     path = RESUME_DIR / f"{int(datetime.utcnow().timestamp())}_{safe_name}"
     path.write_bytes(raw)
@@ -280,7 +461,15 @@ async def upload_resume(request: Request, user: dict = Depends(require_roles("RE
     parsed["resume_file_path"] = str(path)
     parsed["owner_user_id"] = user["id"] if user["role"] == "CANDIDATE" else None
     with connect() as db:
-        return create_candidate_record(db, parsed)
+        candidate = create_candidate_record(db, parsed)
+    audit_log(
+        user,
+        "candidate_created",
+        "candidate",
+        candidate["id"],
+        {"source": "upload", "filename": getattr(file, "filename", None), "bytes": len(raw)},
+    )
+    return candidate
 
 
 @app.get("/api/candidates")
@@ -299,7 +488,9 @@ def jobs(user: dict = Depends(get_current_user)) -> list[dict]:
 def create_job(payload: JobCreateRequest, user: dict = Depends(require_roles("RECRUITER", "ADMIN"))) -> dict:
     parsed = parse_jd(payload.description, payload.title, payload.company)
     with connect() as db:
-        return create_job_record(db, parsed)
+        job = create_job_record(db, parsed)
+    audit_log(user, "job_created", "job", job["id"], {"required_skills": job["required_skills"], "domain": job["domain"]})
+    return job
 
 
 @app.post("/api/match/candidate")
@@ -307,21 +498,37 @@ def match_candidate(payload: MatchRequest, user: dict = Depends(require_roles("R
     with connect() as db:
         candidate = get_candidate_row(db, payload.candidate_id)
         job = get_job_row(db, payload.job_id)
-        return compute_and_store_match(db, candidate, job, payload.bias_safe)
+        result = compute_and_store_match(db, candidate, job, payload.bias_safe)
+    audit_log(
+        user,
+        "candidate_matched",
+        "match_result",
+        result["id"],
+        {"candidate_id": payload.candidate_id, "job_id": payload.job_id, "final_score": result["final_score"]},
+    )
+    return result
 
 
 @app.get("/api/jobs/{job_id}/rank-candidates")
 def rank_candidates(job_id: int, user: dict = Depends(require_roles("RECRUITER", "ADMIN"))) -> list[dict]:
-    return rank_candidates_internal(job_id)
+    rows = rank_candidates_internal(job_id)
+    audit_log(user, "job_ranked", "job", job_id, {"ranked_candidates": len(rows), "top_score": rows[0]["final_score"] if rows else None})
+    return rows
 
 
 def rank_candidates_internal(job_id: int) -> list[dict]:
+    cache_key = f"rankings:{job_id}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return cached
     with connect() as db:
         job = get_job_row(db, job_id)
         rows = []
         for candidate in db.execute("SELECT * FROM candidates").fetchall():
             rows.append(compute_and_store_match(db, candidate, job, True))
-        return sorted(rows, key=lambda item: item["final_score"], reverse=True)
+        ranked = sorted(rows, key=lambda item: item["final_score"], reverse=True)
+    cache_set(cache_key, ranked)
+    return ranked
 
 
 @app.get("/api/candidates/{candidate_id}/skill-gap/{job_id}")
@@ -361,6 +568,13 @@ def interview(payload: InterviewRequest, user: dict = Depends(require_roles("REC
     if not payload.include_answer_hints:
         for item in questions:
             item.pop("expected_signal", None)
+    audit_log(
+        user,
+        "interview_kit_generated",
+        "candidate",
+        payload.candidate_id,
+        {"job_id": payload.job_id, "questions": min(len(questions), 10), "fit_status": match["status"]},
+    )
     return {"candidate_name": candidate["name"], "role": job["title"], "fit_status": match["status"], "questions": questions[:10]}
 
 
@@ -401,6 +615,7 @@ def hr_chat(payload: ChatRequest, user: dict = Depends(require_roles("RECRUITER"
         reverse=True,
     )[:5]
     names = [item["candidate_name"] for item in ranked[:3] if item["retrieval_score"] > 0]
+    audit_log(user, "hr_chat_queried", "candidate_search", None, {"job_id": payload.job_id, "evidence_count": len(ranked)})
     return {
         "question": payload.question,
         "job_id": payload.job_id,
@@ -412,6 +627,7 @@ def hr_chat(payload: ChatRequest, user: dict = Depends(require_roles("RECRUITER"
 @app.get("/api/reports/job/{job_id}")
 def report(job_id: int, format: str = Query("json", pattern="^(json|csv)$"), user: dict = Depends(require_roles("RECRUITER", "ADMIN"))):
     rows = rank_candidates_internal(job_id)
+    audit_log(user, "report_exported", "job", job_id, {"format": format, "rows": len(rows)})
     if format == "json":
         return {"job_id": job_id, "rows": rows}
     output = StringIO()
@@ -484,6 +700,9 @@ def admin_platform_data(user: dict = Depends(require_roles("ADMIN"))) -> dict:
             "candidates": db.execute("SELECT COUNT(*) AS c FROM candidates").fetchone()["c"],
             "jobs": db.execute("SELECT COUNT(*) AS c FROM jobs").fetchone()["c"],
             "matches": db.execute("SELECT COUNT(*) AS c FROM match_results").fetchone()["c"],
+            "audit_events": db.execute("SELECT COUNT(*) AS c FROM audit_logs").fetchone()["c"],
+            "cache": cache_snapshot(),
+            "traffic": http_metrics_snapshot(),
         }
 
 
@@ -547,6 +766,204 @@ def candidate_resume_improvement(job_id: int, candidate_id: int | None = None, u
     if not suggestions:
         suggestions = ["Your resume aligns well. Add more metrics, links, and concrete outcomes to strengthen recruiter trust."]
     return {"missing_skills": gap["missing_skills"], "suggestions": suggestions, "roadmap": gap["roadmap"]}
+
+
+def check_rate_limit(request: Request) -> int | None:
+    if RATE_LIMIT_PER_MINUTE <= 0:
+        return None
+    path = request.url.path
+    if path.startswith(("/docs", "/openapi", "/redoc")):
+        return None
+    now = time.time()
+    client = request.client.host if request.client else "local"
+    with RUNTIME_LOCK:
+        bucket = RATE_BUCKETS.setdefault(client, deque())
+        while bucket and now - bucket[0] > 60:
+            bucket.popleft()
+        if len(bucket) >= RATE_LIMIT_PER_MINUTE:
+            return max(1, int(60 - (now - bucket[0])))
+        bucket.append(now)
+    return None
+
+
+def record_http_metric(request: Request, status_code: int, latency_ms: float) -> None:
+    path_key = f"{request.method} {request.url.path} {status_code // 100}xx"
+    with RUNTIME_LOCK:
+        HTTP_METRICS["requests"] += 1
+        if status_code >= 500:
+            HTTP_METRICS["server_errors"] += 1
+        elif status_code >= 400:
+            HTTP_METRICS["client_errors"] += 1
+        PATH_METRICS[path_key] += 1
+        LATENCY_MS.append(round(latency_ms, 2))
+
+
+def uptime_seconds() -> int:
+    return int((datetime.utcnow() - STARTED_AT).total_seconds())
+
+
+def readiness() -> dict:
+    checks = []
+    try:
+        with connect() as db:
+            db.execute("SELECT 1").fetchone()
+        checks.append({"name": "sqlite", "status": "ok"})
+    except sqlite3.Error as exc:
+        checks.append({"name": "sqlite", "status": "fail", "detail": str(exc)})
+    checks.append({"name": "data_dir", "status": "ok" if DATA_DIR.exists() else "fail", "detail": str(DATA_DIR)})
+    checks.append({"name": "resume_dir", "status": "ok" if RESUME_DIR.exists() else "fail", "detail": str(RESUME_DIR)})
+    status_value = "ready" if all(item["status"] == "ok" for item in checks) else "not_ready"
+    payload = {"status": status_value, "checks": checks, "generated_at": datetime.utcnow().isoformat()}
+    if status_value != "ready":
+        raise HTTPException(status_code=503, detail=payload)
+    return payload
+
+
+def table_counts(db: sqlite3.Connection) -> dict:
+    return {
+        "users": db.execute("SELECT COUNT(*) AS c FROM users").fetchone()["c"],
+        "candidates": db.execute("SELECT COUNT(*) AS c FROM candidates").fetchone()["c"],
+        "jobs": db.execute("SELECT COUNT(*) AS c FROM jobs").fetchone()["c"],
+        "matches": db.execute("SELECT COUNT(*) AS c FROM match_results").fetchone()["c"],
+        "model_experiments": db.execute("SELECT COUNT(*) AS c FROM model_experiments").fetchone()["c"],
+    }
+
+
+def percentile(values: list[float], percentile_value: float) -> float:
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    index = min(len(ordered) - 1, max(0, math.ceil(percentile_value / 100 * len(ordered)) - 1))
+    return round(ordered[index], 2)
+
+
+def http_metrics_snapshot() -> dict:
+    with RUNTIME_LOCK:
+        latencies = list(LATENCY_MS)
+        requests = int(HTTP_METRICS["requests"])
+        server_errors = int(HTTP_METRICS["server_errors"])
+        client_errors = int(HTTP_METRICS["client_errors"])
+        top_paths = [{"route": route, "count": count} for route, count in PATH_METRICS.most_common(8)]
+    return {
+        "requests": requests,
+        "server_errors": server_errors,
+        "client_errors": client_errors,
+        "error_rate_percent": round(server_errors / max(1, requests) * 100, 2),
+        "p50_latency_ms": percentile(latencies, 50),
+        "p95_latency_ms": percentile(latencies, 95),
+        "top_paths": top_paths,
+    }
+
+
+def cache_get(key: str) -> Any | None:
+    if CACHE_TTL_SECONDS <= 0:
+        with RUNTIME_LOCK:
+            CACHE_STATS["misses"] += 1
+        return None
+    now = time.time()
+    with RUNTIME_LOCK:
+        entry = CACHE.get(key)
+        if not entry:
+            CACHE_STATS["misses"] += 1
+            return None
+        if entry["expires_at"] < now:
+            CACHE.pop(key, None)
+            CACHE_STATS["misses"] += 1
+            return None
+        CACHE_STATS["hits"] += 1
+        return copy.deepcopy(entry["value"])
+
+
+def cache_set(key: str, value: Any) -> None:
+    if CACHE_TTL_SECONDS <= 0:
+        return
+    with RUNTIME_LOCK:
+        CACHE[key] = {"expires_at": time.time() + CACHE_TTL_SECONDS, "value": copy.deepcopy(value)}
+        CACHE_STATS["sets"] += 1
+
+
+def invalidate_cache(prefix: str | None = None) -> int:
+    with RUNTIME_LOCK:
+        keys = [key for key in CACHE if prefix is None or key.startswith(prefix)]
+        for key in keys:
+            CACHE.pop(key, None)
+        CACHE_STATS["invalidations"] += len(keys)
+    return len(keys)
+
+
+def cache_snapshot() -> dict:
+    with RUNTIME_LOCK:
+        return {
+            "ttl_seconds": CACHE_TTL_SECONDS,
+            "entries": len(CACHE),
+            "stats": dict(CACHE_STATS),
+            "keys": sorted(CACHE.keys())[:10],
+        }
+
+
+def audit_log(user: dict | None, action: str, resource_type: str, resource_id: Any = None, metadata: dict | None = None) -> None:
+    with connect() as db:
+        db.execute(
+            """
+            INSERT INTO audit_logs (
+              event_id, actor_user_id, actor_role, action, resource_type, resource_id,
+              metadata_json, request_id, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(uuid.uuid4()),
+                user.get("id") if user else None,
+                user.get("role") if user else None,
+                action,
+                resource_type,
+                str(resource_id) if resource_id is not None else None,
+                dump(metadata or {}),
+                REQUEST_ID_CONTEXT.get(),
+                datetime.utcnow().isoformat(),
+            ),
+        )
+        db.commit()
+
+
+def architecture_topology() -> list[dict]:
+    return [
+        {
+            "name": "React recruiter console",
+            "type": "frontend",
+            "responsibility": "Role-specific workflows, uploads, rankings, analytics, and candidate review.",
+            "scale_unit": "Static assets behind CDN or Nginx replicas",
+        },
+        {
+            "name": "FastAPI gateway",
+            "type": "api",
+            "responsibility": "JWT auth, RBAC, request tracing, validation, orchestration, and reporting.",
+            "scale_unit": "Stateless Uvicorn workers",
+        },
+        {
+            "name": "Matching engine",
+            "type": "domain service",
+            "responsibility": "Bias-safe parsing, feature scoring, shortlist calibration, and explanations.",
+            "scale_unit": "Async workers for production ranking bursts",
+        },
+        {
+            "name": "Operational cache",
+            "type": "cache",
+            "responsibility": "TTL cache for expensive ranking reads and repeated analytics calls.",
+            "scale_unit": "Redis cluster in production",
+        },
+        {
+            "name": "SQLite data store",
+            "type": "database",
+            "responsibility": "Users, candidates, jobs, match results, model experiments, and audit logs.",
+            "scale_unit": "PostgreSQL primary plus read replicas in production",
+        },
+        {
+            "name": "Resume object store",
+            "type": "blob storage",
+            "responsibility": "Uploaded resumes with size limits and metadata stored in the database.",
+            "scale_unit": "S3-compatible object storage in production",
+        },
+    ]
 
 
 def extract_file_text(raw: bytes, filename: str) -> str:
@@ -730,6 +1147,7 @@ def create_candidate_record(db: sqlite3.Connection, parsed: dict) -> dict:
         ),
     )
     db.commit()
+    invalidate_cache("rankings:")
     return candidate_out(db.execute("SELECT * FROM candidates WHERE id=?", (cur.lastrowid,)).fetchone())
 
 
@@ -756,6 +1174,7 @@ def create_job_record(db: sqlite3.Connection, parsed: dict) -> dict:
         ),
     )
     db.commit()
+    invalidate_cache("rankings:")
     return job_out(db.execute("SELECT * FROM jobs WHERE id=?", (cur.lastrowid,)).fetchone())
 
 

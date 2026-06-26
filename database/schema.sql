@@ -1,3 +1,13 @@
+CREATE TABLE IF NOT EXISTS users (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  email TEXT NOT NULL UNIQUE,
+  password_hash TEXT NOT NULL,
+  role TEXT NOT NULL CHECK(role IN ('ADMIN', 'RECRUITER', 'CANDIDATE')),
+  company_name TEXT,
+  created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS candidates (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
@@ -11,6 +21,7 @@ CREATE TABLE IF NOT EXISTS candidates (
   certifications_json TEXT NOT NULL,
   resume_text TEXT NOT NULL,
   resume_file_path TEXT,
+  owner_user_id INTEGER,
   created_at TEXT NOT NULL
 );
 
@@ -60,3 +71,34 @@ CREATE TABLE IF NOT EXISTS model_experiments (
   parameters_json TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS audit_logs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  event_id TEXT NOT NULL UNIQUE,
+  actor_user_id INTEGER,
+  actor_role TEXT,
+  action TEXT NOT NULL,
+  resource_type TEXT NOT NULL,
+  resource_id TEXT,
+  metadata_json TEXT NOT NULL,
+  request_id TEXT,
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_candidates_owner_created
+  ON candidates(owner_user_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_jobs_created
+  ON jobs(created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_match_results_job_score
+  ON match_results(job_id, final_score DESC);
+
+CREATE INDEX IF NOT EXISTS idx_match_results_candidate
+  ON match_results(candidate_id);
+
+CREATE INDEX IF NOT EXISTS idx_audit_logs_created
+  ON audit_logs(created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_audit_logs_resource
+  ON audit_logs(resource_type, resource_id);

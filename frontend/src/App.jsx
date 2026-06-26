@@ -48,6 +48,8 @@ function App() {
   const [dragActive, setDragActive] = useState(false);
   const [modelMetrics, setModelMetrics] = useState(null);
   const [systemHealth, setSystemHealth] = useState(null);
+  const [systemOverview, setSystemOverview] = useState(null);
+  const [auditEvents, setAuditEvents] = useState([]);
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
@@ -57,8 +59,8 @@ function App() {
   useEffect(() => {
     refresh();
     fetchModelMetrics();
-    fetchHealth();
-  }, []);
+    fetchPlatformOps();
+  }, [user?.role]);
 
   useEffect(() => {
     if (!selectedJob && jobs[0]) setSelectedJob(String(jobs[0].id));
@@ -72,6 +74,13 @@ function App() {
   const activeJobDetails = useMemo(() => {
     return jobs.find((j) => j.id === selectedJobId) || null;
   }, [jobs, selectedJobId]);
+
+  const platformData = systemOverview?.data || {};
+  const trafficStats = systemOverview?.traffic || {};
+  const cacheInfo = systemOverview?.cache || {};
+  const cacheStats = cacheInfo.stats || {};
+  const cacheRequests = (cacheStats.hits || 0) + (cacheStats.misses || 0);
+  const cacheHitRate = cacheRequests ? Math.round(((cacheStats.hits || 0) / cacheRequests) * 100) : 0;
 
   async function run(label, action) {
     setLoading(true);
@@ -101,11 +110,20 @@ function App() {
     }
   }
 
-  async function fetchHealth() {
+  async function fetchPlatformOps() {
     try {
-      setSystemHealth(await api.health());
+      const [health, overview] = await Promise.all([api.health(), api.systemOverview()]);
+      setSystemHealth(health);
+      setSystemOverview(overview);
+      if (user?.role === "ADMIN") {
+        setAuditEvents(await api.systemAudit(8));
+      } else {
+        setAuditEvents([]);
+      }
     } catch (err) {
       setSystemHealth({ status: "offline", system: "Vireon HireIQ", database: "Unavailable" });
+      setSystemOverview(null);
+      setAuditEvents([]);
     }
   }
 
@@ -116,6 +134,7 @@ function App() {
       setSelectedJob(String(result.job_id));
       setRankings(result.ranked || []);
       setAnalytics(await api.analytics(result.job_id));
+      await fetchPlatformOps();
       setSuccessMsg("Demo data successfully seeded to database.");
     });
   }
@@ -126,6 +145,7 @@ function App() {
       setCandidateName("");
       setResumeText("");
       await refresh();
+      await fetchPlatformOps();
       setSuccessMsg("Candidate profile parsed and stored.");
     });
   }
@@ -138,6 +158,7 @@ function App() {
       setJobTitle("");
       setCompany("");
       setJobText("");
+      await fetchPlatformOps();
       setSuccessMsg("Job description analyzed and tools extracted.");
     });
   }
@@ -148,6 +169,7 @@ function App() {
       const rows = await api.rank(selectedJobId);
       setRankings(rows);
       setAnalytics(await api.analytics(selectedJobId));
+      await fetchPlatformOps();
       setSuccessMsg("Candidate matching pipeline executed successfully.");
     });
   }
@@ -188,6 +210,7 @@ function App() {
 
       await api.uploadResume(formData);
       await refresh();
+      await fetchPlatformOps();
       setSuccessMsg(`File "${file.name}" uploaded and parsed successfully.`);
     });
   }
@@ -223,6 +246,7 @@ function App() {
         ...prev,
         { sender: "bot", text: response.answer, evidence: response.evidence },
       ]);
+      await fetchPlatformOps();
     });
   }
 
@@ -239,6 +263,7 @@ function App() {
       link.click();
       link.remove();
       URL.revokeObjectURL(url);
+      await fetchPlatformOps();
       setSuccessMsg("CSV report exported.");
     });
   }
@@ -329,7 +354,7 @@ function App() {
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
               </svg>
-              Model Labs
+              Platform Ops
             </div>
           </nav>
         </div>
@@ -396,7 +421,7 @@ function App() {
               {activeTab === "candidates" && "Resume Ingestion Hub"}
               {activeTab === "rankings" && "Matching & Rankings"}
               {activeTab === "chat" && "AI Recruiter Assistant"}
-              {activeTab === "model-labs" && "Model Lab Benchmarks"}
+              {activeTab === "model-labs" && "Platform Operations"}
             </h2>
           </div>
           
@@ -1149,169 +1174,207 @@ function App() {
               </div>
             )}
 
-            {/* MODEL LABS TAB */}
+            {/* PLATFORM OPS TAB */}
             {activeTab === "model-labs" && (
-              <div className="grid-2col">
-                {/* Metrics */}
-                <div className="panel" id="panel-model-metrics">
-                  <div className="panel-header">
-                    <h3>ML Pipeline Benchmarks</h3>
-                    <span className="panel-subtitle">Performance scoring evaluation</span>
+              <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
+                <div className="metrics-grid">
+                  <div className="metric-card" id="card-api-p95">
+                    <span className="metric-label">API p95</span>
+                    <div className="metric-value-container">
+                      <strong className="metric-value">{trafficStats.p95_latency_ms ?? 0}</strong>
+                      <span className="metric-label">ms</span>
+                    </div>
                   </div>
 
-                  {modelMetrics ? (
-                    <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
-                      <div>
-                        <span style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase" }}>Model Name</span>
-                        <p style={{ fontSize: "16px", fontWeight: "700", color: "var(--primary)", marginTop: "4px" }}>
-                          {modelMetrics.model_name}
-                        </p>
-                      </div>
-
-                      <div className="grid-2col" style={{ gap: "16px" }}>
-                        <div
-                          style={{
-                            background: "rgba(255, 255, 255, 0.01)",
-                            border: "1px solid var(--border-color)",
-                            padding: "16px",
-                            borderRadius: "12px",
-                          }}
-                        >
-                          <span style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase" }}>F1-Score</span>
-                          <h4 style={{ fontSize: "28px", fontWeight: "800", color: "var(--text-main)", marginTop: "4px" }}>
-                            {modelMetrics.f1_score}
-                          </h4>
-                        </div>
-
-                        <div
-                          style={{
-                            background: "rgba(255, 255, 255, 0.01)",
-                            border: "1px solid var(--border-color)",
-                            padding: "16px",
-                            borderRadius: "12px",
-                          }}
-                        >
-                          <span style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase" }}>Accuracy</span>
-                          <h4 style={{ fontSize: "28px", fontWeight: "800", color: "var(--text-main)", marginTop: "4px" }}>
-                            {modelMetrics.accuracy}
-                          </h4>
-                        </div>
-
-                        <div
-                          style={{
-                            background: "rgba(255, 255, 255, 0.01)",
-                            border: "1px solid var(--border-color)",
-                            padding: "16px",
-                            borderRadius: "12px",
-                          }}
-                        >
-                          <span style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase" }}>Precision</span>
-                          <h4 style={{ fontSize: "28px", fontWeight: "800", color: "var(--text-main)", marginTop: "4px" }}>
-                            {modelMetrics.precision}
-                          </h4>
-                        </div>
-
-                        <div
-                          style={{
-                            background: "rgba(255, 255, 255, 0.01)",
-                            border: "1px solid var(--border-color)",
-                            padding: "16px",
-                            borderRadius: "12px",
-                          }}
-                        >
-                          <span style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase" }}>Recall</span>
-                          <h4 style={{ fontSize: "28px", fontWeight: "800", color: "var(--text-main)", marginTop: "4px" }}>
-                            {modelMetrics.recall}
-                          </h4>
-                        </div>
-                      </div>
-
-                      <div style={{ borderTop: "1px solid var(--border-color)", paddingTop: "16px" }}>
-                        <span style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase", display: "block", marginBottom: "8px" }}>
-                          Active scoring feature weights
-                        </span>
-                        <div className="chips-container">
-                          {modelMetrics.features?.map((f) => (
-                            <span className="chip" key={f}>{f.replace("_", " ")}</span>
-                          ))}
-                        </div>
-                      </div>
+                  <div className="metric-card" id="card-cache-hit-rate">
+                    <span className="metric-label">Cache Hit Rate</span>
+                    <div className="metric-value-container">
+                      <strong className="metric-value">{cacheHitRate}</strong>
+                      <span className="metric-label">%</span>
                     </div>
-                  ) : (
-                    <div className="empty-state">
-                      <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                        <line x1="18" y1="20" x2="18" y2="10" />
-                        <line x1="12" y1="20" x2="12" y2="4" />
-                        <line x1="6" y1="20" x2="6" y2="14" />
-                      </svg>
-                      <h4>Failed to fetch model configuration</h4>
-                      <p>Please check backend console connectivity.</p>
+                  </div>
+
+                  <div className="metric-card" id="card-audit-events">
+                    <span className="metric-label">Audit Events</span>
+                    <div className="metric-value-container">
+                      <strong className="metric-value">{platformData.audit_events ?? 0}</strong>
                     </div>
-                  )}
+                  </div>
+
+                  <div className="metric-card" id="card-system-uptime">
+                    <span className="metric-label">Uptime</span>
+                    <div className="metric-value-container">
+                      <strong className="metric-value">{Math.floor((systemOverview?.service?.uptime_seconds || 0) / 60)}</strong>
+                      <span className="metric-label">min</span>
+                    </div>
+                  </div>
                 </div>
 
-                {/* Database details */}
-                <div className="panel" id="panel-database-info">
-                  <div className="panel-header">
-                    <h3>Database Status</h3>
-                    <span className="panel-subtitle">Sqlite File Diagnostics</span>
+                <div className="grid-2col">
+                  <div className="panel" id="panel-platform-readiness">
+                    <div className="panel-header">
+                      <h3>Platform Readiness</h3>
+                      <span className="panel-subtitle">{systemOverview?.service?.environment || "local"}</span>
+                    </div>
+
+                    <div className="ops-row">
+                      <span
+                        className={`status-dot ${systemHealth?.status === "ok" ? "status-dot-ok" : "status-dot-bad"}`}
+                      ></span>
+                      <strong>{systemHealth?.status === "ok" ? `${systemHealth.system} Online` : "Backend Offline"}</strong>
+                    </div>
+
+                    <div className="platform-grid">
+                      <span>Version</span>
+                      <code>{systemOverview?.service?.version || systemHealth?.version || "Unknown"}</code>
+                      <span>Request ID</span>
+                      <code>{systemHealth?.request_id || "Pending request context"}</code>
+                      <span>Database</span>
+                      <code>{platformData.database_path || systemHealth?.database || "Unavailable"}</code>
+                    </div>
+
+                    <div className="system-check-list">
+                      {(systemOverview?.readiness?.checks || []).map((check) => (
+                        <div className="system-check" key={check.name}>
+                          <span>{check.name}</span>
+                          <span className={`badge ${check.status === "ok" ? "badge-strong" : "badge-reject"}`}>{check.status}</span>
+                        </div>
+                      ))}
+                    </div>
                   </div>
 
-                  <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
-                    <div>
-                      <span style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase" }}>Server Connectivity</span>
-                      <div style={{ display: "flex", alignItems: "center", gap: "8px", marginTop: "4px" }}>
-                        <span
-                          style={{
-                            width: "8px",
-                            height: "8px",
-                            borderRadius: "50%",
-                            background: systemHealth?.status === "ok" ? "var(--success)" : "var(--danger)",
-                          }}
-                        ></span>
-                        <span style={{ fontSize: "14px", fontWeight: "600" }}>
-                          {systemHealth?.status === "ok" ? `${systemHealth.system} Online` : "Backend Offline"}
-                        </span>
+                  <div className="panel" id="panel-model-metrics">
+                    <div className="panel-header">
+                      <h3>Scoring Pipeline</h3>
+                      <span className="panel-subtitle">Hybrid matching baseline</span>
+                    </div>
+
+                    {modelMetrics ? (
+                      <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
+                        <div>
+                          <span style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase" }}>Model Name</span>
+                          <p style={{ fontSize: "16px", fontWeight: "700", color: "var(--primary)", marginTop: "4px" }}>
+                            {modelMetrics.model_name}
+                          </p>
+                        </div>
+
+                        <div className="grid-2col" style={{ gap: "16px" }}>
+                          {[
+                            ["F1-Score", modelMetrics.f1_score],
+                            ["Accuracy", modelMetrics.accuracy],
+                            ["Precision", modelMetrics.precision],
+                            ["Recall", modelMetrics.recall],
+                          ].map(([label, value]) => (
+                            <div className="ops-stat" key={label}>
+                              <span>{label}</span>
+                              <strong>{value}</strong>
+                            </div>
+                          ))}
+                        </div>
+
+                        <div style={{ borderTop: "1px solid var(--border-color)", paddingTop: "16px" }}>
+                          <span style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase", display: "block", marginBottom: "8px" }}>
+                            Active scoring features
+                          </span>
+                          <div className="chips-container">
+                            {modelMetrics.features?.map((f) => (
+                              <span className="chip" key={f}>{f.replace("_", " ")}</span>
+                            ))}
+                          </div>
+                        </div>
                       </div>
+                    ) : (
+                      <div className="empty-state">
+                        <h4>Model metrics unavailable</h4>
+                        <p>Backend benchmark endpoint is not responding.</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="grid-2col">
+                  <div className="panel" id="panel-service-topology">
+                    <div className="panel-header">
+                      <h3>Service Topology</h3>
+                      <span className="panel-subtitle">Runtime boundaries</span>
                     </div>
 
-                    <div>
-                      <span style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase" }}>Storage Location</span>
-                      <p
-                        style={{
-                          fontSize: "12px",
-                          fontFamily: "monospace",
-                          background: "rgba(0, 0, 0, 0.1)",
-                          padding: "8px 12px",
-                          borderRadius: "6px",
-                          marginTop: "4px",
-                          wordBreak: "break-all",
-                        }}
-                      >
-                        {systemHealth?.database || "Waiting for backend health check"}
-                      </p>
+                    <div className="topology-list">
+                      {(systemOverview?.topology || []).map((node) => (
+                        <div className="topology-item" key={node.name}>
+                          <div>
+                            <strong>{node.name}</strong>
+                            <span>{node.type}</span>
+                          </div>
+                          <p>{node.responsibility}</p>
+                          <code>{node.scale_unit}</code>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="panel" id="panel-cache-traffic">
+                    <div className="panel-header">
+                      <h3>Cache & Traffic</h3>
+                      <span className="panel-subtitle">Live process counters</span>
                     </div>
 
-                    <div>
-                      <span style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase" }}>Total Registered Models</span>
-                      <table style={{ width: "100%", borderCollapse: "collapse", marginTop: "8px", fontSize: "13px" }}>
-                        <thead>
-                          <tr style={{ borderBottom: "1px solid var(--border-color)", textAlign: "left" }}>
-                            <th style={{ padding: "6px 0", color: "var(--text-muted)", fontWeight: "600" }}>Entity</th>
-                            <th style={{ padding: "6px 0", color: "var(--text-muted)", fontWeight: "600", textAlign: "right" }}>Count</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          <tr>
-                            <td style={{ padding: "6px 0" }}>Jobs DB</td>
-                            <td style={{ padding: "6px 0", textAlign: "right", fontWeight: "700" }}>{jobs.length}</td>
-                          </tr>
-                          <tr>
-                            <td style={{ padding: "6px 0" }}>Candidates DB</td>
-                            <td style={{ padding: "6px 0", textAlign: "right", fontWeight: "700" }}>{candidates.length}</td>
-                          </tr>
-                        </tbody>
-                      </table>
+                    <div className="platform-grid">
+                      <span>Requests</span>
+                      <code>{trafficStats.requests ?? 0}</code>
+                      <span>Server errors</span>
+                      <code>{trafficStats.server_errors ?? 0}</code>
+                      <span>Cache entries</span>
+                      <code>{cacheInfo.entries ?? 0}</code>
+                      <span>Cache TTL</span>
+                      <code>{cacheInfo.ttl_seconds ?? 0}s</code>
+                    </div>
+
+                    <div className="data-table">
+                      {(trafficStats.top_paths || []).map((item) => (
+                        <div className="table-row compact-row" key={item.route}>
+                          <strong>{item.route}</strong>
+                          <span>{item.count} hits</span>
+                        </div>
+                      ))}
+                      {!(trafficStats.top_paths || []).length && <p className="empty-copy">No traffic sampled yet.</p>}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid-2col">
+                  <div className="panel" id="panel-audit-trail">
+                    <div className="panel-header">
+                      <h3>Audit Trail</h3>
+                      <span className="panel-subtitle">Decision events</span>
+                    </div>
+
+                    <div className="data-table">
+                      {auditEvents.map((event) => (
+                        <div className="table-row" key={event.event_id}>
+                          <strong>{event.action}</strong>
+                          <span>{event.resource_type}{event.resource_id ? ` #${event.resource_id}` : ""}</span>
+                          <span className="badge badge-strong">{event.actor_role || "SYSTEM"}</span>
+                        </div>
+                      ))}
+                      {user?.role !== "ADMIN" && <p className="empty-copy">Admin role can view recent audit events.</p>}
+                      {user?.role === "ADMIN" && !auditEvents.length && <p className="empty-copy">No audit events recorded yet.</p>}
+                    </div>
+                  </div>
+
+                  <div className="panel" id="panel-scale-path">
+                    <div className="panel-header">
+                      <h3>Scale Path</h3>
+                      <span className="panel-subtitle">Production evolution</span>
+                    </div>
+
+                    <div className="ops-list">
+                      {(systemOverview?.scale_path || []).map((item, index) => (
+                        <div className="ops-list-item" key={item}>
+                          <span>{index + 1}</span>
+                          <p>{item}</p>
+                        </div>
+                      ))}
                     </div>
                   </div>
                 </div>

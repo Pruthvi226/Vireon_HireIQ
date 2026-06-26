@@ -5,8 +5,9 @@
 ![SQLite](https://img.shields.io/badge/Database-SQLite-64748b)
 ![Auth](https://img.shields.io/badge/Auth-JWT%20RBAC-f59e0b)
 ![Status](https://img.shields.io/badge/Smoke%20Test-Passing-16a34a)
+![Ops](https://img.shields.io/badge/System%20Design-Platform%20Ops-2563eb)
 
-Vireon HireIQ is a deploy-ready AI hiring intelligence console for ATS, job portal, and HRMS workflows. It parses resumes, analyzes job descriptions, ranks candidates, predicts shortlist probability, explains hiring decisions, generates interview kits, and gives recruiters a grounded HR assistant over candidate evidence.
+Vireon HireIQ is a  AI hiring intelligence console for ATS, job portal, and HRMS workflows. It parses resumes, analyzes job descriptions, ranks candidates, predicts shortlist probability, explains hiring decisions, generates interview kits, and gives recruiters a grounded HR assistant over candidate evidence.
 
 ## Screenshots
 
@@ -29,6 +30,8 @@ The screenshots below were captured from a live seeded local run.
 - Builds skill-gap roadmaps and recruiter interview kits.
 - Provides an HR assistant for grounded candidate search and comparison.
 - Exports ranked candidates as CSV.
+- Shows Platform Ops with readiness, request tracing, cache stats, traffic counters, audit events, topology, and scale path.
+- Records audit logs for decision-impacting actions such as matching, ranking, interviews, chat, and reports.
 - Protects ADMIN, RECRUITER, and CANDIDATE experiences with JWT role-based access.
 - Ships with Docker Compose, a FastAPI backend, and an Nginx-served React frontend.
 
@@ -39,8 +42,23 @@ The screenshots below were captured from a live seeded local run.
 | Frontend | React 18, Vite, React Router, Framer Motion |
 | Backend | FastAPI, Python, deterministic NLP scoring |
 | Auth | JWT, bcrypt, role-based route guards |
-| Storage | SQLite plus local resume storage |
+| Storage | SQLite with configurable journal mode plus local resume storage |
+| Platform Ops | Request IDs, readiness checks, TTL cache, audit logs, rate limits |
 | Deployment | Docker Compose, Uvicorn, Nginx API proxy |
+
+## System Design Upgrade
+
+The project now includes production-style architecture primitives while remaining simple to run locally:
+
+- Stateless FastAPI boundary with JWT identity and RBAC.
+- Request ID propagation via `X-Request-ID` and response latency via `X-Process-Time-Ms`.
+- Separate liveness and readiness endpoints for deployment orchestration.
+- In-process TTL cache for repeated ranking reads with invalidation on candidate/job writes.
+- Immutable audit log table for screening decisions and exported reports.
+- SQLite configurable journal mode, busy timeouts, and indexes for ranking, ownership, and audit queries.
+- Platform Ops dashboard showing topology, SLO-oriented counters, cache behavior, and scale path.
+
+See [docs/SYSTEM_DESIGN.md](docs/SYSTEM_DESIGN.md) for architecture, tradeoffs, request flow, consistency model, SLO targets, and the production evolution path.
 
 ## Quick Start
 
@@ -60,6 +78,10 @@ Recommended backend environment:
 JWT_SECRET_KEY=replace-with-a-long-random-secret
 JWT_EXPIRE_HOURS=24
 VIREON_DATA_DIR=./runtime
+VIREON_CACHE_TTL_SECONDS=60
+VIREON_RATE_LIMIT_PER_MINUTE=240
+VIREON_SQLITE_JOURNAL_MODE=MEMORY
+MAX_RESUME_BYTES=5242880
 CORS_ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
 ```
 
@@ -111,6 +133,14 @@ curl -X POST http://localhost:8000/api/demo/seed-users
 
 ## Docker Deploy
 
+Create a deployment env file first:
+
+```bash
+cp .env.example .env
+```
+
+Set a strong `JWT_SECRET_KEY`, then run:
+
 ```bash
 docker compose up --build
 ```
@@ -119,13 +149,14 @@ docker compose up --build
 - API: `http://localhost:8000`
 - API docs: `http://localhost:8000/docs`
 
-The production frontend container serves the React build through Nginx and proxies `/api/*` to the backend container. SQLite data is persisted in the `vireon_data` Docker volume.
+The production frontend container serves the React build through Nginx and proxies `/api/*` to the backend container. SQLite data is persisted in the `vireon_data` Docker volume. Docker Compose waits for backend readiness before starting the web container and exposes health checks for both services.
 
 ## Core API Routes
 
 | Area | Endpoints |
 | --- | --- |
-| Health and demo | `GET /api/health`, `POST /api/demo/seed`, `POST /api/demo/seed-users` |
+| Health and demo | `GET /api/health`, `GET /api/ready`, `POST /api/demo/seed`, `POST /api/demo/seed-users` |
+| Platform ops | `GET /api/system/overview`, `GET /api/system/audit?limit=20` |
 | Auth | `POST /api/auth/register`, `POST /api/auth/login`, `GET /api/auth/me` |
 | Resumes | `POST /api/resumes/text`, `POST /api/resumes/upload`, `GET /api/candidates` |
 | Jobs and matching | `POST /api/jobs/create`, `GET /api/jobs`, `POST /api/match/candidate`, `GET /api/jobs/{job_id}/rank-candidates` |
@@ -151,31 +182,40 @@ Protected route groups:
 
 ## Smoke Test Status
 
-Verified on 2026-06-08 with a live local run:
+Verified on 2026-06-26 in this workspace:
 
 - `npm run build` completed successfully.
-- Backend Uvicorn smoke test passed for health, demo seed, recruiter login, `/api/auth/me`, candidates, jobs, ranking, analytics, skill gap, interview generation, HR chat, CSV export, and candidate `403` role guard.
-- Screenshot capture passed through headless Chrome against the seeded app.
+- Backend parse check passed for `backend/app/main.py`, `backend/auth/auth_service.py`, and `backend/scripts/smoke_test.py`.
+- Reusable full-feature API smoke test passed: `python backend/scripts/smoke_test.py --base-url http://127.0.0.1:8010`.
+- Backend smoke used a fresh `VIREON_DATA_DIR` for health, readiness, demo seed, auth, resume text/file ingestion, matching, ranking, analytics, skill gaps, interview kits, HR chat, CSV export, admin APIs, candidate APIs, platform ops, and RBAC denial checks.
 
 Representative smoke result:
 
 ```json
 {
   "smoke": "OK",
+  "health": "ok",
+  "ready": "ready",
+  "version": "2.0.0",
   "seeded_rankings": 3,
-  "candidates": 3,
-  "jobs": 1,
-  "top_score": 69.9,
-  "analytics_total": 3,
-  "interview_questions": 6,
-  "chat_evidence": 3,
-  "role_guard_status": 403
+  "cache_entries": 1,
+  "audit_events_checked": 1
 }
 ```
 
+## Release Smoke Test
+
+After starting either Uvicorn or Docker Compose, run the full API smoke suite:
+
+```bash
+python backend/scripts/smoke_test.py --base-url http://127.0.0.1:8000
+```
+
+It validates 41 checks across auth, RBAC, seeding, resume ingestion, jobs, matching, ranking, analytics, candidate self-service, admin APIs, platform ops, audit logs, chat, and CSV export.
+
 ## Runtime Data
 
-Local SQLite data and uploaded resumes are written to `backend/runtime` by default. Override storage with:
+Local SQLite data, audit logs, cache-derived match results, and uploaded resumes are written to `backend/runtime` by default. Override storage with:
 
 ```env
 VIREON_DATA_DIR=./storage
@@ -187,7 +227,7 @@ or:
 DATABASE_URL=sqlite:///./storage/vireon_hireiq.sqlite
 ```
 
-Runtime databases, uploaded resumes, virtualenvs, logs, and build artifacts are ignored by git. Passwords are stored as bcrypt hashes; plain passwords are never stored.
+Runtime databases, uploaded resumes, virtualenvs, logs, and build artifacts are ignored by git. Passwords are stored as bcrypt hashes; plain passwords are never stored. SQLite defaults to `MEMORY` journal mode for synced-folder compatibility; use `VIREON_SQLITE_JOURNAL_MODE=WAL` on storage that supports WAL sidecar files.
 
 ## Project Structure
 
@@ -197,6 +237,7 @@ AI_Interview/
 |-- frontend/             React/Vite dashboard
 |-- database/             SQL schema reference
 |-- docs/screenshots/     README screenshots
+|-- docs/SYSTEM_DESIGN.md System architecture and scale path
 |-- docker-compose.yml    Production compose stack
 `-- README.md
 ```

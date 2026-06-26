@@ -23,13 +23,23 @@ if DATABASE_URL.startswith("sqlite:///"):
 else:
     DATA_DIR = Path(os.getenv("VIREON_DATA_DIR") or DEFAULT_DATA_DIR)
     DB_PATH = DATA_DIR / "vireon_hireiq.sqlite"
+SQLITE_JOURNAL_MODE = os.getenv("VIREON_SQLITE_JOURNAL_MODE", "MEMORY").upper()
+if SQLITE_JOURNAL_MODE not in {"DELETE", "TRUNCATE", "PERSIST", "MEMORY", "WAL", "OFF"}:
+    SQLITE_JOURNAL_MODE = "MEMORY"
 
 
 def connect() -> sqlite3.Connection:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
-    conn.execute("PRAGMA journal_mode=MEMORY")
+    try:
+        conn.execute(f"PRAGMA journal_mode={SQLITE_JOURNAL_MODE}")
+    except sqlite3.OperationalError:
+        conn.close()
+        conn = sqlite3.connect(DB_PATH)
+        conn.execute("PRAGMA journal_mode=MEMORY")
     conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute("PRAGMA busy_timeout=5000")
     conn.row_factory = sqlite3.Row
     return conn
 

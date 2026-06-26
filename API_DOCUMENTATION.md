@@ -2,19 +2,35 @@
 
 Base URL: `http://localhost:8000`
 
-## Health
+## Health and Readiness
 
 `GET /health`
 
 `GET /api/health`
 
-Returns backend and database status.
+Returns liveness, API version, uptime, database path and request ID.
+
+`GET /ready`
+
+`GET /api/ready`
+
+Returns dependency readiness checks for SQLite and runtime storage. A failed check returns `503`.
+
+## Platform Operations
+
+`GET /api/system/overview`
+
+Returns topology, readiness, data counts, traffic counters, cache stats, resilience controls, SLO targets and production scale path. Requires ADMIN or RECRUITER.
+
+`GET /api/system/audit?limit=20`
+
+Returns recent audit events with actor role, action, resource, metadata, request ID and timestamp. Requires ADMIN.
 
 ## Demo Seed
 
 `POST /api/demo/seed`
 
-Creates one AI Intern job, three candidates, rankings and a baseline experiment record.
+Creates one AI Intern job, three candidates, rankings, a baseline experiment record and an audit event.
 
 ## Candidates
 
@@ -95,3 +111,14 @@ Ranks every candidate for a job.
 ```
 
 `GET /api/reports/job/{job_id}?format=csv`
+
+Decision-impacting write/read workflows append audit events: candidate creation, job creation, matching, ranking, interview kit generation, HR assistant query and report export. Responses include `X-Request-ID` and `X-Process-Time-Ms` headers.
+
+
+## Smoke Test
+
+Run the full live API smoke suite against a started backend:
+
+```bash
+python backend/scripts/smoke_test.py --base-url http://127.0.0.1:8000
+```

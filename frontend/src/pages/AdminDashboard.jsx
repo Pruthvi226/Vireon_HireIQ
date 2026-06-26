@@ -123,6 +123,12 @@ export default function AdminDashboard() {
         <div className="platform-grid">
           <span>Database</span>
           <code>{state.platform?.database || "Loading..."}</code>
+          <span>Audit events</span>
+          <code>{state.platform?.audit_events ?? 0}</code>
+          <span>API p95 latency</span>
+          <code>{state.platform?.traffic?.p95_latency_ms ?? 0} ms</code>
+          <span>Cache entries</span>
+          <code>{state.platform?.cache?.entries ?? 0}</code>
           <span>Protected API groups</span>
           <code>/api/admin, /api/recruiter, /api/candidate</code>
         </div>

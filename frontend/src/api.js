@@ -66,6 +66,8 @@ export const api = {
       body: JSON.stringify({ question, job_id: jobId ? Number(jobId) : null }),
   }),
   experiment: () => request("/api/model/experiment"),
+  systemOverview: () => request("/api/system/overview"),
+  systemAudit: (limit = 8) => request(`/api/system/audit?limit=${limit}`),
   adminUsers: () => request("/api/admin/users"),
   adminCandidates: () => request("/api/admin/candidates"),
   adminJobs: () => request("/api/admin/jobs"),
