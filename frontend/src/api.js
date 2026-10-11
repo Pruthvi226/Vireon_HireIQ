@@ -20,6 +20,9 @@ async function request(path, options = {}) {
     ...fetchOptions,
     headers,
   });
+  if (response.ok && responseType === "blob") {
+    return response.blob();
+  }
   const text = await response.text();
   if (!response.ok) {
     let message = text;
@@ -44,6 +47,8 @@ export const api = {
   jobs: (params = {}) => request(`/api/jobs?${new URLSearchParams(params)}`),
   createCandidate: (payload) => request("/api/resumes/text", { method: "POST", body: JSON.stringify(payload) }),
   uploadResume: (formData) => request("/api/resumes/upload", { method: "POST", body: formData }),
+  resumeLimits: () => request("/api/resumes/limits"),
+  bulkUploadResumes: (formData) => request("/api/resumes/bulk", { method: "POST", body: formData }),
   createJob: (payload) => request("/api/jobs/create", { method: "POST", body: JSON.stringify(payload) }),
   rank: (jobId) => request(`/api/jobs/${jobId}/rank-candidates`),
   analytics: (jobId) => request(`/api/analytics/job/${jobId}`),
@@ -75,6 +80,8 @@ export const api = {
     request(`/api/candidate/skill-gap/${jobId}${candidateId ? `?candidate_id=${candidateId}` : ""}`),
   candidateResumeImprovement: (jobId, candidateId) =>
     request(`/api/candidate/resume-improvement/${jobId}${candidateId ? `?candidate_id=${candidateId}` : ""}`),
+  candidateSkillGapExport: (jobId, candidateId, format) => request(`/api/candidate/skill-gap/${jobId}/export?${new URLSearchParams({ candidate_id: candidateId, format })}`, { responseType: "blob" }),
+  candidateInterviewKitExport: (jobId, candidateId, format) => request(`/api/candidate/interview-kit/${jobId}/export?${new URLSearchParams({ candidate_id: candidateId, format })}`, { responseType: "blob" }),
   reportCsv: (jobId) => request(`/api/reports/job/${jobId}?format=csv`, { responseType: "text" }),
   reportUrl: (jobId, format = "csv") => `${API_BASE}${apiPath(`/api/reports/job/${jobId}?format=${format}`)}`,
 };

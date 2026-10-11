@@ -5,13 +5,19 @@ import { beforeEach, expect, it, vi } from "vitest";
 import { api } from "../api";
 import CandidateDashboard from "./CandidateDashboard";
 import AdminDashboard from "./AdminDashboard";
+import { downloadBlob } from "../downloads";
+
+vi.mock("../downloads", () => ({ downloadBlob: vi.fn() }));
 
 vi.mock("../auth/AuthContext", () => ({ useAuth: () => ({ user: { id: 1, name: "Jane", role: "ADMIN" }, logout: vi.fn() }) }));
 vi.mock("../api", () => ({ api: {
-  candidateProfile: vi.fn(), jobs: vi.fn(), createCandidate: vi.fn(), candidateAtsScore: vi.fn(), candidateSkillGap: vi.fn(), candidateResumeImprovement: vi.fn(),
+  candidateProfile: vi.fn(), jobs: vi.fn(), resumeLimits: vi.fn(), createCandidate: vi.fn(), candidateAtsScore: vi.fn(), candidateSkillGap: vi.fn(), candidateResumeImprovement: vi.fn(), candidateSkillGapExport: vi.fn(), candidateInterviewKitExport: vi.fn(),
   adminUsers: vi.fn(), adminPlatformData: vi.fn(), systemAudit: vi.fn(),
 } }));
-beforeEach(() => { vi.resetAllMocks(); });
+beforeEach(() => {
+  vi.resetAllMocks();
+  api.resumeLimits.mockResolvedValue({ max_resume_bytes: 5 * 1024 * 1024, extensions: [".txt", ".pdf", ".docx"] });
+});
 
 it("lets a candidate save a resume and review evidence for a job", async () => {
   api.candidateProfile.mockResolvedValue({ resumes: [] });
@@ -30,6 +36,15 @@ it("lets a candidate save a resume and review evidence for a job", async () => {
   await user.click(screen.getByRole("button", { name: "Review my fit" }));
   expect(await screen.findByText("Add measurable SQL project evidence.")).toBeInTheDocument();
   expect(api.candidateAtsScore).toHaveBeenCalledWith("2", "3");
+  const pdf = new Blob(["%PDF-export"], { type: "application/pdf" });
+  api.candidateSkillGapExport.mockResolvedValue(pdf);
+  await user.click(screen.getByRole("button", { name: "Download learning plan (PDF)" }));
+  await waitFor(() => expect(downloadBlob).toHaveBeenCalledWith(pdf, "learning-plan-job-2-resume-3.pdf"));
+  expect(api.candidateSkillGapExport).toHaveBeenCalledWith("2", "3", "pdf");
+  api.candidateInterviewKitExport.mockRejectedValue(new Error("Resume is no longer available"));
+  await user.click(screen.getByRole("button", { name: "Download interview kit (CSV)" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("Resume is no longer available");
+  expect(downloadBlob).toHaveBeenCalledTimes(1);
 });
 
 it("shows actionable candidate API failures", async () => {

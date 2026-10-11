@@ -4,6 +4,7 @@ import { useAuth } from "../auth/AuthContext";
 import PageShell from "../components/PageShell";
 import Pagination from "../components/Pagination";
 import ScoreBadge from "../components/ScoreBadge";
+import { downloadBlob } from "../downloads";
 
 export default function CandidateDashboard() {
   const { user } = useAuth();
@@ -17,14 +18,16 @@ export default function CandidateDashboard() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [limits, setLimits] = useState(null);
 
   useEffect(() => {
     let active = true;
     setError("");
-    Promise.all([api.candidateProfile(), api.jobs({ page, status: "open" })]).then(([profile, rows]) => {
+    Promise.all([api.candidateProfile(), api.jobs({ page, status: "open" }), api.resumeLimits()]).then(([profile, rows, uploadLimits]) => {
       if (!active) return;
       setResumes(profile.resumes);
       setJobs(rows);
+      setLimits(uploadLimits);
       setSelectedResume((current) => current || String(profile.resumes[0]?.id || ""));
       setSelectedJob(String(rows.items[0]?.id || ""));
       setResult(null);
@@ -50,6 +53,10 @@ export default function CandidateDashboard() {
     const file = event.target.files?.[0];
     event.target.value = "";
     if (!file) return;
+    if (!limits.extensions.some((extension) => file.name.toLowerCase().endsWith(extension)) || file.size > limits.max_resume_bytes) {
+      setError(`Choose a TXT, PDF or DOCX resume up to ${Number((limits.max_resume_bytes / (1024 * 1024)).toFixed(1))} MB.`);
+      return;
+    }
     await run(async () => {
       const form = new FormData(); form.append("file", file); form.append("candidate_name", user.name);
       const candidate = await api.uploadResume(form);
@@ -69,12 +76,21 @@ export default function CandidateDashboard() {
     });
   }
 
+  async function exportGuidance(kind, format) {
+    await run(async () => {
+      const exportFile = kind === "learning-plan" ? api.candidateSkillGapExport : api.candidateInterviewKitExport;
+      const blob = await exportFile(selectedJob, selectedResume, format);
+      downloadBlob(blob, `${kind}-job-${selectedJob}-resume-${selectedResume}.${format}`);
+      setNotice(`${kind === "learning-plan" ? "Learning plan" : "Interview kit"} downloaded as ${format.toUpperCase()}.`);
+    });
+  }
+
   return <PageShell title={`Welcome, ${user?.name || "candidate"}`} description="Build a clear resume and understand how your evidence matches an open role.">
     {error && <p className="error-message" role="alert">{error}</p>}
     {notice && <p className="success-message" role="status">{notice}</p>}
     <div className="grid-2col">
-      <section className="panel page-stack"><h2>Your resume</h2><p className="muted">Upload TXT, PDF or DOCX, up to 5 MB. PDFs need selectable text.</p>
-        <label>Upload resume<input type="file" accept=".txt,.pdf,.docx" onChange={upload} disabled={busy} /></label>
+      <section className="panel page-stack"><h2>Your resume</h2><p className="muted">Upload TXT, PDF or DOCX{limits ? `, up to ${Number((limits.max_resume_bytes / (1024 * 1024)).toFixed(1))} MB` : ""}. PDFs need selectable text.</p>
+        <label>Upload resume<input type="file" accept=".txt,.pdf,.docx" onChange={upload} disabled={busy || !limits} /></label>
         <form className="page-stack" onSubmit={saveResume}>
           <label>Or paste resume text<textarea rows="8" minLength="20" maxLength="100000" required value={text} onChange={(event) => setText(event.target.value)} /></label>
           <button className="btn btn-primary" disabled={busy || text.trim().length < 20}>{busy ? "Working…" : "Save resume"}</button>
@@ -100,6 +116,12 @@ export default function CandidateDashboard() {
       <h3>Skills to strengthen</h3><div className="chips-container">{result.gap.missing_skills.map((skill) => <span className="chip" key={skill}>{skill}</span>)}{!result.gap.missing_skills.length && <p>No direct skill gaps found.</p>}</div>
       <h3>Resume improvements</h3><ul className="content-list">{result.advice.suggestions.map((suggestion) => <li key={suggestion}>{suggestion}</li>)}</ul>
       {result.gap.roadmap.length > 0 && <><h3>Learning roadmap</h3><ol className="content-list">{result.gap.roadmap.map((item) => <li key={item.week}>Week {item.week}: {item.skill} — {item.action}</li>)}</ol></>}
+      <h3>Take your next steps</h3>
+      <p className="muted">Save your learning plan or interview practice questions for this resume and role.</p>
+      <div className="page-actions">
+        {["pdf", "csv"].map((format) => <button key={`plan-${format}`} className="btn btn-outline" disabled={busy} onClick={() => exportGuidance("learning-plan", format)}>Download learning plan ({format.toUpperCase()})</button>)}
+        {["pdf", "csv"].map((format) => <button key={`interview-${format}`} className="btn btn-outline" disabled={busy} onClick={() => exportGuidance("interview-kit", format)}>Download interview kit ({format.toUpperCase()})</button>)}
+      </div>
     </section>}
   </PageShell>;
 }

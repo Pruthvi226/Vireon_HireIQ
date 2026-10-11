@@ -6,7 +6,7 @@ import App from "./App";
 import { api } from "./api";
 
 vi.mock("./auth/AuthContext", () => ({ useAuth: () => ({ user: { id: 1, name: "Recruiter", role: "RECRUITER" }, logout: vi.fn() }) }));
-vi.mock("./api", () => ({ api: { candidates: vi.fn(), jobs: vi.fn(), experiment: vi.fn(), health: vi.fn(), systemOverview: vi.fn(), skillGap: vi.fn(), interview: vi.fn() } }));
+vi.mock("./api", () => ({ api: { candidates: vi.fn(), jobs: vi.fn(), experiment: vi.fn(), health: vi.fn(), systemOverview: vi.fn(), skillGap: vi.fn(), interview: vi.fn(), resumeLimits: vi.fn() } }));
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -17,6 +17,7 @@ beforeEach(() => {
   api.systemOverview.mockResolvedValue({});
   api.skillGap.mockResolvedValue({ strong_skills: ["Python"], partial_skills: [], missing_skills: [], roadmap: [] });
   api.interview.mockResolvedValue({ questions: [] });
+  api.resumeLimits.mockResolvedValue({ max_resume_bytes: 5242880, max_bulk_bytes: 26214400, max_bulk_files: 25, extensions: [".txt", ".pdf", ".docx"], archive_extension: ".zip" });
 });
 
 it("provides keyboard navigation and restores focus after closing candidate insights", async () => {

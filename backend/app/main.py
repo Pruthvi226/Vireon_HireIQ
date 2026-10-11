@@ -536,6 +536,13 @@ async def upload_resume(request: Request, user: dict = Depends(require_roles("RE
         await file.close()
 
 
+@app.get("/api/resumes/limits")
+def resume_limits(user: dict = Depends(require_roles("RECRUITER", "CANDIDATE", "ADMIN"))) -> dict:
+    return {"max_resume_bytes": MAX_RESUME_BYTES, "max_bulk_bytes": MAX_BULK_BYTES,
+            "max_bulk_files": MAX_BULK_FILES, "extensions": [".txt", ".pdf", ".docx"],
+            "archive_extension": ".zip"}
+
+
 @app.post("/api/resumes/bulk")
 async def bulk_upload_resumes(request: Request, user: dict = Depends(require_roles("RECRUITER", "ADMIN"))) -> dict:
     form = await request.form(max_files=MAX_BULK_FILES, max_fields=2)
@@ -543,8 +550,14 @@ async def bulk_upload_resumes(request: Request, user: dict = Depends(require_rol
     if not uploads or len(uploads) > MAX_BULK_FILES or any(not hasattr(item, "read") for item in uploads):
         await form.close()
         raise HTTPException(status_code=400, detail=f"Provide between 1 and {MAX_BULK_FILES} files")
+    # Multipart parsing has already measured each file. Reject an oversized
+    # batch before importing any file, so a retry cannot duplicate earlier rows.
+    if sum(upload.size or 0 for upload in uploads) > MAX_BULK_BYTES:
+        await form.close()
+        raise HTTPException(status_code=413, detail="Bulk upload exceeds total byte budget")
     results: list[dict] = []
     total_bytes = 0
+    expanded_bytes = 0
     for upload in uploads:
         if len(results) >= MAX_BULK_FILES:
             results.append({"filename": "batch", "status": "error", "error": "Maximum expanded file count reached"})
@@ -559,8 +572,10 @@ async def bulk_upload_resumes(request: Request, user: dict = Depends(require_rol
             try:
                 with zipfile.ZipFile(BytesIO(raw)) as archive:
                     entries = [info for info in archive.infolist() if not info.is_dir() and not Path(info.filename).name.startswith(".")]
-                    if len(entries) + len(results) > MAX_BULK_FILES or sum(info.file_size for info in entries) > MAX_BULK_BYTES:
+                    archive_bytes = sum(info.file_size for info in entries)
+                    if len(entries) + len(results) > MAX_BULK_FILES or archive_bytes + expanded_bytes > MAX_BULK_BYTES:
                         raise ValueError("Archive exceeds file count or decompressed byte budget")
+                    expanded_bytes += archive_bytes
                     for info in entries:
                         try:
                             if info.file_size > MAX_RESUME_BYTES or info.file_size > max(1, info.compress_size) * 100:
@@ -573,6 +588,10 @@ async def bulk_upload_resumes(request: Request, user: dict = Depends(require_rol
             except (ValueError, zipfile.BadZipFile) as exc:
                 results.append({"filename": filename, "status": "error", "error": str(exc)})
             continue
+        if expanded_bytes + len(raw) > MAX_BULK_BYTES:
+            results.append({"filename": filename, "status": "error", "error": "Batch exceeds decompressed byte budget"})
+            continue
+        expanded_bytes += len(raw)
         try:
             results.append({"filename": filename, "status": "success", "candidate": create_uploaded_candidate(raw, filename, None, user)})
         except ValueError as exc:

@@ -49,6 +49,13 @@ Both `/api/demo/seed` and `/api/demo/seed-users` return `404` outside local/dev/
 
 Multipart form with `file` and optional `candidate_name`.
 
+`GET /api/resumes/limits`
+
+Requires an authenticated candidate, recruiter or administrator. Returns current
+`max_resume_bytes`, `max_bulk_bytes`, `max_bulk_files`, `extensions` and
+`archive_extension`. Upload interfaces read these values rather than assuming
+the default deployment configuration.
+
 `GET /api/candidates`
 
 Lists parsed candidates using `page`, `page_size`, `search`, and `sort`; returns `{items,total,page,page_size}`.
@@ -56,6 +63,13 @@ Lists parsed candidates using `page`, `page_size`, `search`, and `sort`; returns
 `POST /api/resumes/bulk`
 
 Multipart `files` upload accepting multiple resumes or ZIP archives. Returns per-file success/error results.
+
+Recruiter/admin access is required. The response is
+`{results:[{filename,status,candidate?|error?}],succeeded,failed}`. The multipart
+byte budget is checked before importing any document. ZIP expansion budgets
+are shared across the whole batch. Successful imports remain saved when another
+entry fails; retry only failed documents to avoid duplicate candidates. A lost
+response can have an uncertain outcome, so check the candidate list before retrying.
 
 Defaults: 5 MB per resume, 25 files per request, 25 MB bulk byte budget,
 100:1 maximum ZIP entry expansion ratio, 100000 extracted characters, and a

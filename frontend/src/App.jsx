@@ -4,6 +4,8 @@ import { useAuth } from "./auth/AuthContext";
 import { motion, AnimatePresence } from "framer-motion";
 import ScoreBadge from "./components/ScoreBadge";
 import Pagination from "./components/Pagination";
+import BulkResumeImport from "./components/BulkResumeImport";
+import { downloadBlob } from "./downloads";
 import useDialogFocus from "./components/useDialogFocus";
 import { Link } from "react-router-dom";
 
@@ -237,6 +239,7 @@ function App() {
   }
 
   async function handleFileUpload(file) {
+    if (loading) return;
     if (!file) return;
     await run("upload", async () => {
       const formData = new FormData();
@@ -293,14 +296,7 @@ function App() {
     await run("report", async () => {
       const csv = await api.reportCsv(selectedJobId);
       const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = `vireon-job-${selectedJobId}.csv`;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      URL.revokeObjectURL(url);
+      downloadBlob(blob, `vireon-job-${selectedJobId}.csv`);
       await fetchPlatformOps();
       setSuccessMsg("CSV report exported.");
     });
@@ -910,6 +906,7 @@ function App() {
                       type="file"
                       className="file-upload-input"
                       accept=".pdf,.docx,.txt"
+                      disabled={loading}
                       onChange={async (e) => {
                         if (e.target.files && e.target.files[0]) {
                           await handleFileUpload(e.target.files[0]);
@@ -957,6 +954,12 @@ function App() {
                   >
                     Parse & Save Profile
                   </button>
+                  <BulkResumeImport disabled={loading} onBusyChange={setLoading} onImported={async () => {
+                    rankRequest.current += 1;
+                    setRankings([]); setAnalytics(null); setGap(null); setInterview(null);
+                    await refresh();
+                    await fetchPlatformOps();
+                  }} />
                 </div>
 
                 {/* Candidate database directory */}

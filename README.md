@@ -210,8 +210,8 @@ See [API_DOCUMENTATION.md](API_DOCUMENTATION.md) for more request examples.
 ## Role Access
 
 - ADMIN can view users, platform data, jobs, candidates, analytics, and admin dashboards.
-- RECRUITER can create jobs, upload resumes, rank candidates, generate interviews, view analytics, export reports, and use the HR assistant.
-- CANDIDATE can upload their own resume and view their own ATS score, skill gaps, and resume improvement guidance.
+- RECRUITER can create jobs, upload resumes individually or in batches/ZIP archives, review per-file import results, rank candidates, generate interviews, view analytics, export reports, and use the HR assistant.
+- CANDIDATE can upload their own resume, review ATS scores, skill gaps and resume guidance, and download learning plans and interview kits as PDF or CSV after a fit review.
 
 Protected route groups:
 
