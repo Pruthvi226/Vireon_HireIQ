@@ -64,15 +64,29 @@ jobs:
       - run: docker compose -f docker-compose.yml -f docker-compose.test.yml run --rm --no-deps frontend
       - run: docker compose -f docker-compose.yml -f docker-compose.test.yml down -v
         if: always()
-      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+      - name: Scan backend image
+        id: scan-backend
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: vireon-hireiq-backend:ci
-          format: table
+          format: json
+          output: trivy-backend.json
           exit-code: '1'
           severity: CRITICAL,HIGH
-      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+          ignore-unfixed: false
+      - name: Scan frontend image
+        if: ${{ !cancelled() && steps.scan-backend.outcome != 'skipped' }}
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: vireon-hireiq-frontend:ci
-          format: table
+          format: json
+          output: trivy-frontend.json
           exit-code: '1'
           severity: CRITICAL,HIGH
+          ignore-unfixed: false
+      - name: Upload image vulnerability reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: image-vulnerability-reports
+          path: trivy-*.json

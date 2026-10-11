@@ -90,3 +90,42 @@ npm audit --audit-level=high
 Run smoke only against an isolated started test API. The suite writes demo and
 workflow data. Initial sandbox attempts hit pytest temporary-directory access
 errors and esbuild spawn EPERM; authorized runs outside the sandbox succeeded.
+
+## Container security follow-up (2026-10-11)
+
+Docker became available for this follow-up. Both updated production images built
+locally. Trivy 0.70.0 scanned the final images with HIGH/CRITICAL severity and
+without excluding unfixed vulnerabilities:
+
+| Runtime image | Before | After | Remaining blocker |
+| --- | --- | --- | --- |
+| Backend | 48 findings (44 Debian, 4 Python) | 44 Debian, 0 Python | Debian stable has no patched versions listed for these findings |
+| Frontend | 43 findings in the Nginx 1.27 Alpine base | 0 | None in this scan |
+
+The backend now removes pip from both the copied virtual environment and the
+system Python installation, along with ensurepip's installer wheels. Installation
+remains in the build stage; runtime package installation is intentionally unavailable.
+This removes the vulnerable bundled msgpack, setuptools and urllib3 copies.
+Application dependency versions did not change. All 37 backend tests passed
+inside the rebuilt Python 3.12 image with 86.35% statement coverage. Existing
+deprecation warnings remain.
+
+The frontend uses the verified Nginx 1.30.5 stable Alpine image pinned by digest
+and upgrades Alpine packages during the build. Its production bundle built and
+`nginx -t` passed with the application configuration.
+
+The backend blocker covers eight distinct CVEs reported across multiple installed
+Debian packages: CVE-2025-69720, CVE-2026-16742, CVE-2026-54369,
+CVE-2026-76642, CVE-2026-78408, CVE-2026-78409, CVE-2026-78410 and
+CVE-2026-9538. The Debian tracker confirms the stable-release patch gap for
+[util-linux](https://security-tracker.debian.org/tracker/CVE-2026-76642),
+[ncurses](https://security-tracker.debian.org/tracker/CVE-2025-69720) and
+[Perl](https://security-tracker.debian.org/tracker/CVE-2026-9538).
+This is an unresolved release blocker, not an accepted exception or a clean scan.
+Rebuild and rescan when Debian publishes patches; changing the runtime distribution
+would require a separate compatibility review.
+
+CI retains exit code 1 for all HIGH/CRITICAL findings, including unfixed findings.
+The frontend scan runs even when the backend scan fails, and both JSON reports
+are uploaded as the `image-vulnerability-reports` artifact. A failing image gate
+must continue to block release approval.
