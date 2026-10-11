@@ -1,195 +1,105 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { api } from "../api";
 import { useAuth } from "../auth/AuthContext";
-
-const starterResume = `Demo Candidate
-candidate@vireon.ai
-Skills: Python, SQL, REST API, Git, Machine Learning
-Projects: Built a resume scoring dashboard with model evaluation and API integrations.
-Experience: Internship projects focused on data preprocessing and documentation.
-Education: Computer Science graduate with AI coursework.`;
+import PageShell from "../components/PageShell";
+import Pagination from "../components/Pagination";
+import ScoreBadge from "../components/ScoreBadge";
 
 export default function CandidateDashboard() {
-  const { user, logout } = useAuth();
-  const [resumeText, setResumeText] = useState(starterResume);
-  const [jobs, setJobs] = useState([]);
-  const [profile, setProfile] = useState(null);
+  const { user } = useAuth();
+  const [resumes, setResumes] = useState([]);
+  const [jobs, setJobs] = useState({ items: [], total: 0 });
+  const [page, setPage] = useState(1);
   const [selectedJob, setSelectedJob] = useState("");
-  const [score, setScore] = useState(null);
-  const [gap, setGap] = useState(null);
-  const [suggestions, setSuggestions] = useState(null);
+  const [selectedResume, setSelectedResume] = useState("");
+  const [text, setText] = useState("");
+  const [result, setResult] = useState(null);
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [success, setSuccess] = useState("");
-  const [loading, setLoading] = useState(false);
-
-  const selectedJobId = useMemo(() => Number(selectedJob || jobs[0]?.id || 0), [selectedJob, jobs]);
-
-  async function load() {
-    setError("");
-    try {
-      const [jobRows, candidateProfile] = await Promise.all([api.jobs(), api.candidateProfile()]);
-      setJobs(jobRows);
-      setProfile(candidateProfile);
-      if (!selectedJob && jobRows[0]) setSelectedJob(String(jobRows[0].id));
-    } catch (err) {
-      setError(err.message || "Failed to load candidate workspace");
-    }
-  }
+  const [notice, setNotice] = useState("");
 
   useEffect(() => {
-    load();
-  }, []);
-
-  async function run(action, doneMessage) {
-    setLoading(true);
+    let active = true;
     setError("");
-    setSuccess("");
-    try {
-      await action();
-      if (doneMessage) setSuccess(doneMessage);
-    } catch (err) {
-      setError(err.message || "Request failed");
-    } finally {
-      setLoading(false);
-    }
+    Promise.all([api.candidateProfile(), api.jobs({ page, status: "open" })]).then(([profile, rows]) => {
+      if (!active) return;
+      setResumes(profile.resumes);
+      setJobs(rows);
+      setSelectedResume((current) => current || String(profile.resumes[0]?.id || ""));
+      setSelectedJob(String(rows.items[0]?.id || ""));
+      setResult(null);
+    }).catch((err) => { if (active) setError(err.message); });
+    return () => { active = false; };
+  }, [page]);
+
+  async function run(action) {
+    setBusy(true); setError(""); setNotice("");
+    try { await action(); } catch (err) { setError(err.message); } finally { setBusy(false); }
   }
 
-  async function saveResume() {
+  async function saveResume(event) {
+    event.preventDefault();
     await run(async () => {
-      await api.createCandidate({ name: user?.name || null, resume_text: resumeText });
-      await load();
-    }, "Resume uploaded and linked to your candidate account.");
+      const candidate = await api.createCandidate({ name: user.name, resume_text: text });
+      setResumes((rows) => [candidate, ...rows]); setSelectedResume(String(candidate.id));
+      setText(""); setResult(null); setNotice("Resume saved. Choose a job to review your fit.");
+    });
+  }
+
+  async function upload(event) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    await run(async () => {
+      const form = new FormData(); form.append("file", file); form.append("candidate_name", user.name);
+      const candidate = await api.uploadResume(form);
+      setResumes((rows) => [candidate, ...rows]); setSelectedResume(String(candidate.id));
+      setResult(null); setNotice("Resume uploaded successfully.");
+    });
   }
 
   async function analyze() {
-    if (!selectedJobId) {
-      setError("Select a job before requesting candidate insights.");
-      return;
-    }
     await run(async () => {
-      const [scoreData, gapData, improvementData] = await Promise.all([
-        api.candidateAtsScore(selectedJobId),
-        api.candidateSkillGap(selectedJobId),
-        api.candidateResumeImprovement(selectedJobId),
+      const [score, gap, advice] = await Promise.all([
+        api.candidateAtsScore(selectedJob, selectedResume),
+        api.candidateSkillGap(selectedJob, selectedResume),
+        api.candidateResumeImprovement(selectedJob, selectedResume),
       ]);
-      setScore(scoreData);
-      setGap(gapData);
-      setSuggestions(improvementData);
-    }, "Candidate analysis refreshed.");
+      setResult({ score, gap, advice });
+    });
   }
 
-  const latestResume = profile?.resumes?.[0];
-
-  return (
-    <main className="role-shell candidate-shell">
-      <header className="role-topbar">
-        <div>
-          <span className="eyebrow">Candidate dashboard</span>
-          <h1>Your ATS readiness workspace</h1>
-          <p>{user?.email}</p>
-        </div>
-        <div className="role-actions">
-          <button className="btn btn-secondary" onClick={load} disabled={loading}>
-            Refresh
-          </button>
-          <button className="btn btn-primary" onClick={logout}>
-            Logout
-          </button>
-        </div>
-      </header>
-
-      {error && <div className="alert alert-danger">{error}</div>}
-      {success && <div className="alert alert-success">{success}</div>}
-
-      <section className="grid-2col">
-        <article className="panel">
-          <div className="panel-header">
-            <h3>Resume upload</h3>
-            <span className="panel-subtitle">Private to your candidate account</span>
-          </div>
-          <div className="form-group">
-            <label htmlFor="candidate-resume">Resume text</label>
-            <textarea
-              id="candidate-resume"
-              className="textarea-input"
-              value={resumeText}
-              onChange={(event) => setResumeText(event.target.value)}
-            />
-          </div>
-          <button className="btn btn-primary" onClick={saveResume} disabled={loading || resumeText.trim().length < 20}>
-            Upload resume
-          </button>
-        </article>
-
-        <article className="panel">
-          <div className="panel-header">
-            <h3>ATS score</h3>
-            <span className="panel-subtitle">Match against an active job</span>
-          </div>
-          <div className="form-group">
-            <label htmlFor="candidate-job">Job</label>
-            <select
-              id="candidate-job"
-              className="dropdown-select"
-              value={selectedJob}
-              onChange={(event) => setSelectedJob(event.target.value)}
-            >
-              <option value="">Select job</option>
-              {jobs.map((job) => (
-                <option key={job.id} value={job.id}>
-                  {job.company ? `${job.company} - ` : ""}
-                  {job.title}
-                </option>
-              ))}
-            </select>
-          </div>
-          <button className="btn btn-primary" onClick={analyze} disabled={loading || !selectedJobId || !latestResume}>
-            Analyze my fit
-          </button>
-
-          {score && (
-            <div className="score-card">
-              <strong>{score.ats_score}%</strong>
-              <span>{score.status}</span>
-              <p>{score.match.explanation}</p>
-            </div>
-          )}
-          {!latestResume && <p className="empty-copy">Upload your resume before requesting an ATS score.</p>}
-        </article>
+  return <PageShell title={`Welcome, ${user?.name || "candidate"}`} description="Build a clear resume and understand how your evidence matches an open role.">
+    {error && <p className="error-message" role="alert">{error}</p>}
+    {notice && <p className="success-message" role="status">{notice}</p>}
+    <div className="grid-2col">
+      <section className="panel page-stack"><h2>Your resume</h2><p className="muted">Upload TXT, PDF or DOCX, up to 5 MB. PDFs need selectable text.</p>
+        <label>Upload resume<input type="file" accept=".txt,.pdf,.docx" onChange={upload} disabled={busy} /></label>
+        <form className="page-stack" onSubmit={saveResume}>
+          <label>Or paste resume text<textarea rows="8" minLength="20" maxLength="100000" required value={text} onChange={(event) => setText(event.target.value)} /></label>
+          <button className="btn btn-primary" disabled={busy || text.trim().length < 20}>{busy ? "Working…" : "Save resume"}</button>
+        </form>
       </section>
-
-      <section className="grid-2col">
-        <article className="panel">
-          <div className="panel-header">
-            <h3>Skill gap analysis</h3>
-            <span className="panel-subtitle">Strong skills and gaps</span>
-          </div>
-          <div className="chips-container">
-            {gap?.strong_skills?.map((skill) => (
-              <span className="chip chip-success" key={skill}>{skill}</span>
-            ))}
-            {gap?.missing_skills?.map((skill) => (
-              <span className="chip chip-danger" key={skill}>{skill}</span>
-            ))}
-            {!gap && <p className="empty-copy">Run analysis to see skill fit.</p>}
-          </div>
-        </article>
-
-        <article className="panel">
-          <div className="panel-header">
-            <h3>Resume improvements</h3>
-            <span className="panel-subtitle">Actionable suggestions</span>
-          </div>
-          <div className="data-table">
-            {suggestions?.suggestions?.map((item) => (
-              <div className="table-row" key={item}>
-                <span>{item}</span>
-              </div>
-            ))}
-            {!suggestions && <p className="empty-copy">Suggestions will appear after analysis.</p>}
-          </div>
-        </article>
+      <section className="panel page-stack"><h2>Explore your job fit</h2>
+        {!resumes.length && <p className="muted">Save your first resume to unlock a fit review.</p>}
+        <label>Resume<select value={selectedResume} disabled={busy} onChange={(event) => { setSelectedResume(event.target.value); setResult(null); }}>
+          <option value="">Choose a resume</option>{resumes.map((resume) => <option key={resume.id} value={resume.id}>{resume.name} · {new Date(resume.created_at).toLocaleDateString()}</option>)}
+        </select></label>
+        <label>Open job<select value={selectedJob} disabled={busy} onChange={(event) => { setSelectedJob(event.target.value); setResult(null); }}>
+          <option value="">Choose a job</option>{jobs.items.map((job) => <option key={job.id} value={job.id}>{job.title}{job.company ? ` · ${job.company}` : ""}</option>)}
+        </select></label>
+        {!jobs.total && <p className="muted">No open jobs yet. Check back when recruiters publish a role.</p>}
+        <Pagination page={page} total={jobs.total} onChange={setPage} disabled={busy} />
+        <button className="btn btn-primary" disabled={busy || !selectedJob || !selectedResume} onClick={analyze}>{busy ? "Analyzing…" : "Review my fit"}</button>
       </section>
-    </main>
-  );
+    </div>
+    {result && <section className="panel page-stack" aria-live="polite">
+      <h2>{result.score.job.title}</h2><div className="page-actions"><ScoreBadge score={result.score.ats_score} /><strong>{result.score.status}</strong></div>
+      <p className="muted">This heuristic score describes resume evidence. It is not a hiring decision or a validated probability.</p>
+      <p>{result.score.match.explanation}</p>
+      <h3>Skills to strengthen</h3><div className="chips-container">{result.gap.missing_skills.map((skill) => <span className="chip" key={skill}>{skill}</span>)}{!result.gap.missing_skills.length && <p>No direct skill gaps found.</p>}</div>
+      <h3>Resume improvements</h3><ul className="content-list">{result.advice.suggestions.map((suggestion) => <li key={suggestion}>{suggestion}</li>)}</ul>
+      {result.gap.roadmap.length > 0 && <><h3>Learning roadmap</h3><ol className="content-list">{result.gap.roadmap.map((item) => <li key={item.week}>Week {item.week}: {item.skill} — {item.action}</li>)}</ol></>}
+    </section>}
+  </PageShell>;
 }

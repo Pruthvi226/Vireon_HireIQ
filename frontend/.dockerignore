@@ -4,3 +4,4 @@ vite.log
 vite.err.log
 .env.local
 .env
+.env.example

@@ -8,15 +8,19 @@ services:
     environment:
       APP_ENV: ${APP_ENV:-production}
       VIREON_DATA_DIR: /app/storage
-      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-replace-with-a-long-random-secret-before-production}
-      JWT_EXPIRE_HOURS: ${JWT_EXPIRE_HOURS:-24}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?JWT_SECRET_KEY must be supplied in .env or the environment}
+      JWT_EXPIRE_MINUTES: ${JWT_EXPIRE_MINUTES:-15}
       VIREON_CACHE_TTL_SECONDS: ${VIREON_CACHE_TTL_SECONDS:-60}
       VIREON_RATE_LIMIT_PER_MINUTE: ${VIREON_RATE_LIMIT_PER_MINUTE:-240}
+      DATABASE_URL: ${DATABASE_URL:-}
+      REDIS_URL: ${REDIS_URL:-}
       VIREON_SQLITE_JOURNAL_MODE: ${VIREON_SQLITE_JOURNAL_MODE:-WAL}
       MAX_RESUME_BYTES: ${MAX_RESUME_BYTES:-5242880}
-      CORS_ALLOWED_ORIGINS: http://localhost:5173,http://127.0.0.1:5173,http://localhost:8080,http://127.0.0.1:8080
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:8080}
+      ENABLE_EMBEDDINGS: ${ENABLE_EMBEDDINGS:-false}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-all-MiniLM-L6-v2}
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     volumes:
       - vireon_data:/app/storage
     healthcheck:
@@ -34,7 +38,7 @@ services:
       backend:
         condition: service_healthy
     ports:
-      - "8080:80"
+      - "127.0.0.1:8080:80"
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/health >/dev/null 2>&1 || exit 1"]
       interval: 30s
@@ -42,5 +46,24 @@ services:
       retries: 3
       start_period: 10s
 
+  postgres:
+    image: postgres:16-alpine
+    profiles: [production]
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-vireon}
+      POSTGRES_USER: ${POSTGRES_USER:-vireon}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    profiles: [production]
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+
 volumes:
   vireon_data:
+  postgres_data:
+  redis_data:

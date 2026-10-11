@@ -1,7 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
 import { useAuth } from "./auth/AuthContext";
 import { motion, AnimatePresence } from "framer-motion";
+import ScoreBadge from "./components/ScoreBadge";
+import Pagination from "./components/Pagination";
+import useDialogFocus from "./components/useDialogFocus";
+import { Link } from "react-router-dom";
 
 const sampleResume = `Pruthvi Raj Panduga
 pruthvi@example.com
@@ -50,6 +54,14 @@ function App() {
   const [systemHealth, setSystemHealth] = useState(null);
   const [systemOverview, setSystemOverview] = useState(null);
   const [auditEvents, setAuditEvents] = useState([]);
+  const [candidatePage, setCandidatePage] = useState(1);
+  const [candidateTotal, setCandidateTotal] = useState(0);
+  const [candidateSearch, setCandidateSearch] = useState("");
+  const [candidateQuery, setCandidateQuery] = useState("");
+  const detailRequest = useRef(0);
+  const rankRequest = useRef(0);
+  const closeDrawer = useCallback(() => { detailRequest.current += 1; setSelectedCandidateDetail(null); }, []);
+  useDialogFocus(Boolean(selectedCandidateDetail), closeDrawer, "#drawer-panel");
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
@@ -57,10 +69,23 @@ function App() {
   }, [theme]);
 
   useEffect(() => {
-    refresh();
+    refresh().catch((err) => setError(err.message));
     fetchModelMetrics();
     fetchPlatformOps();
   }, [user?.role]);
+
+  useEffect(() => {
+    let active = true;
+    api.candidates({ page: candidatePage, search: candidateQuery }).then((rows) => {
+      if (active) { setCandidates(rows.items); setCandidateTotal(rows.total); }
+    }).catch((err) => { if (active) setError(err.message); });
+    return () => { active = false; };
+  }, [candidatePage, candidateQuery]);
+
+  useEffect(() => {
+    rankRequest.current += 1;
+    setRankings([]); setAnalytics(null); setGap(null); setInterview(null); closeDrawer();
+  }, [selectedJob, closeDrawer]);
 
   useEffect(() => {
     if (!selectedJob && jobs[0]) setSelectedJob(String(jobs[0].id));
@@ -96,9 +121,11 @@ function App() {
   }
 
   async function refresh() {
-    const [candidateRows, jobRows] = await Promise.all([api.candidates(), api.jobs()]);
-    setCandidates(candidateRows);
-    setJobs(jobRows);
+    const [candidateRows, firstJobs] = await Promise.all([api.candidates({ page: candidatePage, search: candidateQuery }), api.jobs({ page_size: 100 })]);
+    const remainingJobs = await Promise.all(Array.from({ length: Math.max(0, Math.ceil(firstJobs.total / 100) - 1) }, (_, index) => api.jobs({ page: index + 2, page_size: 100 })));
+    setCandidates(candidateRows.items || []);
+    setCandidateTotal(candidateRows.total);
+    setJobs([firstJobs, ...remainingJobs].flatMap((rows) => rows.items));
   }
 
   async function fetchModelMetrics() {
@@ -166,9 +193,12 @@ function App() {
   async function rank() {
     if (!selectedJobId) return;
     await run("rank", async () => {
+      const requestId = ++rankRequest.current;
       const rows = await api.rank(selectedJobId);
+      const insights = await api.analytics(selectedJobId);
+      if (requestId !== rankRequest.current) return;
       setRankings(rows);
-      setAnalytics(await api.analytics(selectedJobId));
+      setAnalytics(insights);
       await fetchPlatformOps();
       setSuccessMsg("Candidate matching pipeline executed successfully.");
     });
@@ -179,22 +209,30 @@ function App() {
       setError("Please select a job description first.");
       return;
     }
-    const candidate = candidates.find((c) => c.id === candidateId);
+    let candidate = candidates.find((c) => c.id === candidateId);
+    if (!candidate) {
+      // Rankings include candidates beyond the visible directory page.
+      const row = rankings.find((item) => item.candidate_id === candidateId);
+      if (row) candidate = { id: candidateId, name: row.candidate_name, links: [], skills: [] };
+    }
     if (!candidate) return;
 
     setSelectedCandidateDetail(candidate);
+    setGap(null); setInterview(null);
+    const requestId = ++detailRequest.current;
     setDrawerLoading(true);
     try {
       const [gapData, interviewData] = await Promise.all([
         api.skillGap(candidateId, selectedJobId),
         api.interview(candidateId, selectedJobId),
       ]);
+      if (requestId !== detailRequest.current) return;
       setGap(gapData);
       setInterview(interviewData);
     } catch (err) {
       setError("Failed to fetch candidate insights: " + err.message);
     } finally {
-      setDrawerLoading(false);
+      if (requestId === detailRequest.current) setDrawerLoading(false);
     }
   }
 
@@ -270,6 +308,7 @@ function App() {
 
   return (
     <main className="app-shell">
+      <a className="skip-link" href="#workspace-content">Skip to content</a>
       {/* Sidebar Navigation */}
       <aside className="sidebar">
         <div>
@@ -282,7 +321,7 @@ function App() {
           </div>
           
           <nav className="nav-links">
-            <div
+            <button type="button"
               className={`nav-item ${activeTab === "overview" ? "active" : ""}`}
               onClick={() => setActiveTab("overview")}
               id="nav-overview"
@@ -294,9 +333,9 @@ function App() {
                 <rect x="3" y="16" width="7" height="5" />
               </svg>
               Overview
-            </div>
+            </button>
 
-            <div
+            <button type="button"
               className={`nav-item ${activeTab === "job-lab" ? "active" : ""}`}
               onClick={() => setActiveTab("job-lab")}
               id="nav-job-lab"
@@ -306,9 +345,9 @@ function App() {
                 <path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16" />
               </svg>
               Job Lab
-            </div>
+            </button>
 
-            <div
+            <button type="button"
               className={`nav-item ${activeTab === "candidates" ? "active" : ""}`}
               onClick={() => setActiveTab("candidates")}
               id="nav-candidates"
@@ -320,9 +359,9 @@ function App() {
                 <path d="M16 3.13a4 4 0 0 1 0 7.75" />
               </svg>
               Candidates
-            </div>
+            </button>
 
-            <div
+            <button type="button"
               className={`nav-item ${activeTab === "rankings" ? "active" : ""}`}
               onClick={() => setActiveTab("rankings")}
               id="nav-rankings"
@@ -333,9 +372,9 @@ function App() {
                 <line x1="6" y1="20" x2="6" y2="14" />
               </svg>
               Matching Matrix
-            </div>
+            </button>
 
-            <div
+            <button type="button"
               className={`nav-item ${activeTab === "chat" ? "active" : ""}`}
               onClick={() => setActiveTab("chat")}
               id="nav-chat"
@@ -344,9 +383,9 @@ function App() {
                 <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
               </svg>
               HR Assistant
-            </div>
+            </button>
 
-            <div
+            <button type="button"
               className={`nav-item ${activeTab === "model-labs" ? "active" : ""}`}
               onClick={() => setActiveTab("model-labs")}
               id="nav-model-labs"
@@ -355,7 +394,7 @@ function App() {
                 <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
               </svg>
               Platform Ops
-            </div>
+            </button>
           </nav>
         </div>
 
@@ -369,6 +408,7 @@ function App() {
               </div>
             </div>
           )}
+          {user?.role === "ADMIN" && <Link className="btn btn-outline" to="/admin">Administration</Link>}
           <button className="btn btn-secondary w-full" onClick={seed} disabled={loading} id="btn-seed-demo">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{marginRight: "6px"}}>
               <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" />
@@ -410,7 +450,7 @@ function App() {
       </aside>
 
       {/* Main Workspace Area */}
-      <section className="workspace">
+      <section className="workspace" id="workspace-content">
         {/* Topbar */}
         <header className="topbar">
           <div className="topbar-title">
@@ -432,6 +472,7 @@ function App() {
                 value={selectedJob}
                 onChange={(e) => setSelectedJob(e.target.value)}
                 id="select-job-context"
+                aria-label="Job context"
               >
                 <option value="">Select Job Description Context</option>
                 {jobs.map((job) => (
@@ -446,7 +487,7 @@ function App() {
               <button
                 className="btn btn-primary"
                 onClick={rank}
-                disabled={loading || !selectedJobId}
+                disabled={loading || !selectedJobId || activeJobDetails?.status !== "open"}
                 id="btn-run-matching"
               >
                 Match & Rank
@@ -469,6 +510,13 @@ function App() {
           </div>
         </header>
 
+        {activeJobDetails && <div className="page-actions" style={{ marginBottom: 20 }}>
+          <label>Job status<select value={activeJobDetails.status || "open"} disabled={loading} onChange={(event) => run("status", async () => {
+            await api.updateJobStatus(selectedJobId, event.target.value);
+            setRankings([]); setAnalytics(null); await refresh(); setSuccessMsg("Job status updated.");
+          })}>{["draft", "open", "closed", "archived"].map((status) => <option key={status}>{status}</option>)}</select></label>
+        </div>}
+
         {/* Global Loading and Error Banner */}
         <AnimatePresence>
           {error && (
@@ -477,7 +525,7 @@ function App() {
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0 }}
               className="alert alert-danger"
-              id="alert-error-banner"
+              id="alert-error-banner" role="alert"
             >
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <circle cx="12" cy="12" r="10" />
@@ -494,7 +542,7 @@ function App() {
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0 }}
               className="alert alert-success"
-              id="alert-success-banner"
+              id="alert-success-banner" role="status"
             >
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
@@ -915,8 +963,13 @@ function App() {
                 <div className="panel" id="panel-candidate-directory">
                   <div className="panel-header">
                     <h3>Candidate Database</h3>
-                    <span className="panel-subtitle">{candidates.length} Profiles parsed</span>
+                    <span className="panel-subtitle">{candidateTotal} Profiles parsed</span>
                   </div>
+                  <form className="page-actions" onSubmit={(event) => { event.preventDefault(); setCandidatePage(1); setCandidateQuery(candidateSearch); }}>
+                    <label>Search candidates<input type="search" maxLength="120" value={candidateSearch} onChange={(event) => setCandidateSearch(event.target.value)} placeholder="Name, email or resume skills" /></label>
+                    <button className="btn btn-outline">Search</button>
+                  </form>
+                  <Pagination page={candidatePage} total={candidateTotal} onChange={setCandidatePage} disabled={loading} />
 
                   <div
                     style={{
@@ -950,6 +1003,7 @@ function App() {
                         <div style={{ display: "flex", alignItems: "center" }}>
                           <button
                             className="btn btn-outline"
+                            onClick={(event) => { event.stopPropagation(); inspectCandidate(c.id); }}
                             style={{ height: "32px", padding: "0 10px", borderRadius: "6px" }}
                           >
                             Details
@@ -998,6 +1052,14 @@ function App() {
                     >
                       <div>
                         <strong className="candidate-name">{row.candidate_name}</strong>
+                        <div className="page-actions" onClick={(event) => event.stopPropagation()}>
+                          <button className="btn btn-outline" onClick={() => inspectCandidate(row.candidate_id)}>View insights</button>
+                          <label>Pipeline stage<select value={row.pipeline_stage || "Applied"} disabled={loading} onChange={(event) => run("stage", async () => {
+                            const updated = await api.updateStage(row.id, event.target.value);
+                            setRankings((rows) => rows.map((item) => item.id === row.id ? { ...item, pipeline_stage: updated.pipeline_stage } : item));
+                            setSuccessMsg("Pipeline stage updated.");
+                          })}>{["Applied", "Screened", "Interview", "Offer", "Hired", "Rejected"].map((stage) => <option key={stage}>{stage}</option>)}</select></label>
+                        </div>
                         <p className="candidate-explanation">{row.explanation}</p>
                         <div className="chips-container" style={{ marginTop: "10px" }}>
                           {row.matched_skills?.slice(0, 4).map((skill) => (
@@ -1030,7 +1092,7 @@ function App() {
 
                       <div>
                         <span style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase" }}>
-                          Shortlist Prob
+                          Shortlist heuristic
                         </span>
                         <p style={{ fontSize: "16px", fontWeight: "800", color: "var(--text-main)", marginTop: "4px" }}>
                           {row.shortlist_probability}%
@@ -1038,24 +1100,7 @@ function App() {
                       </div>
 
                       <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}>
-                        <span style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase" }}>
-                          Match Score
-                        </span>
-                        <div className="radial-progress" style={{ marginTop: "4px" }}>
-                          <svg>
-                            <circle className="circle-bg" cx="45" cy="45" r="36" />
-                            <circle
-                              className="circle-val"
-                              cx="45"
-                              cy="45"
-                              r="36"
-                              style={{
-                                strokeDashoffset: 251.2 - (251.2 * row.final_score) / 100,
-                              }}
-                            />
-                          </svg>
-                          <span className="radial-progress-value">{row.final_score}%</span>
-                        </div>
+                        <ScoreBadge score={row.final_score} />
                       </div>
                     </article>
                   ))}
@@ -1248,6 +1293,7 @@ function App() {
                       <h3>Scoring Pipeline</h3>
                       <span className="panel-subtitle">Hybrid matching baseline</span>
                     </div>
+                    <p className="muted">Demo fixtures and rule-generated labels are not independent model validation. Shortlist values are heuristics, not calibrated probabilities.</p>
 
                     {modelMetrics ? (
                       <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
@@ -1258,7 +1304,7 @@ function App() {
                           </p>
                         </div>
 
-                        <div className="grid-2col" style={{ gap: "16px" }}>
+                        {modelMetrics.evaluation_status === "synthetic_labels" ? <div className="grid-2col" style={{ gap: "16px" }}>
                           {[
                             ["F1-Score", modelMetrics.f1_score],
                             ["Accuracy", modelMetrics.accuracy],
@@ -1270,7 +1316,7 @@ function App() {
                               <strong>{value}</strong>
                             </div>
                           ))}
-                        </div>
+                        </div> : <p className="muted">No evaluated metrics available for this fixture.</p>}
 
                         <div style={{ borderTop: "1px solid var(--border-color)", paddingTop: "16px" }}>
                           <span style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase", display: "block", marginBottom: "8px" }}>
@@ -1392,7 +1438,7 @@ function App() {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             className="drawer-backdrop"
-            onClick={() => setSelectedCandidateDetail(null)}
+            onClick={closeDrawer}
             id="drawer-backdrop"
           >
             <motion.div
@@ -1403,11 +1449,15 @@ function App() {
               className="drawer-content"
               onClick={(e) => e.stopPropagation()}
               id="drawer-panel"
+              role="dialog"
+              aria-modal="true"
+              aria-label={`Candidate insights: ${selectedCandidateDetail.name}`}
             >
               {/* Close Button */}
               <button
                 className="drawer-close"
-                onClick={() => setSelectedCandidateDetail(null)}
+                onClick={closeDrawer}
+                aria-label="Close candidate insights"
                 id="btn-close-drawer"
               >
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">

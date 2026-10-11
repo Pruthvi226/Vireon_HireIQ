@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --upgrade pip==26.2.1
+      - run: pip install -r requirements.txt pytest pytest-cov
+      - run: pip install -r requirements-security.txt
+      - run: pip-audit --progress-spinner off --format json -o python-audit.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: python-audit-report
+          path: backend/python-audit.json
+      - run: python -m compileall app auth
+      - run: pytest --cov=app --cov=auth --cov-fail-under=80
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm audit --audit-level=high --json > npm-audit.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: npm-audit-report
+          path: frontend/npm-audit.json
+      - run: npm run build
+      - run: npm test -- --run
+
+  images:
+    runs-on: ubuntu-latest
+    needs: [backend, frontend]
+    env:
+      JWT_SECRET_KEY: test-compose-secret-with-more-than-32-characters
+      POSTGRES_PASSWORD: test-postgres-password
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t vireon-hireiq-backend:ci -f backend/Dockerfile backend
+      - run: docker build -t vireon-hireiq-frontend:ci -f frontend/Dockerfile frontend
+      - run: docker compose -f docker-compose.yml -f docker-compose.test.yml build
+      - run: docker compose -f docker-compose.yml -f docker-compose.test.yml run --rm --no-deps backend
+      - run: docker compose -f docker-compose.yml -f docker-compose.test.yml run --rm --no-deps frontend
+      - run: docker compose -f docker-compose.yml -f docker-compose.test.yml down -v
+        if: always()
+      - uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: vireon-hireiq-backend:ci
+          format: table
+          exit-code: '1'
+          severity: CRITICAL,HIGH
+      - uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: vireon-hireiq-frontend:ci
+          format: table
+          exit-code: '1'
+          severity: CRITICAL,HIGH

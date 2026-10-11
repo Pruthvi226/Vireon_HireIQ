@@ -130,10 +130,10 @@ class SmokeClient:
                 "POST",
                 "/api/auth/register",
                 {
-                    "name": f"Smoke Recruiter {unique}",
+                    "name": f"Smoke Candidate {unique}",
                     "email": f"smoke-{unique}@vireon.ai",
                     "password": "smoke12345",
-                    "role": "RECRUITER",
+                    "role": "CANDIDATE",
                     "company_name": "Smoke Labs",
                 },
             )["user"]["role"],

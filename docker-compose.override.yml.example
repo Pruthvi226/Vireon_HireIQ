@@ -1,0 +1,15 @@
+services:
+  backend:
+    environment:
+      APP_ENV: development
+      VIREON_SQLITE_JOURNAL_MODE: MEMORY
+    volumes:
+      - ./backend:/app
+      - vireon_dev_data:/app/storage
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+  frontend:
+    volumes:
+      - ./frontend:/app
+
+volumes:
+  vireon_dev_data:

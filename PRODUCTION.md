@@ -1,5 +1,8 @@
 # Production Notes
 
+The current authoritative procedure is [the deployment and recovery runbook](docs/DEPLOYMENT_RUNBOOK.md).
+See [verified results and limitations](docs/VERIFICATION.md) before a release.
+
 ## Deployable MVP
 
 This repo includes production-oriented Docker packaging:
@@ -28,10 +31,16 @@ The local stack now includes practical production contracts:
 - Request tracing: `X-Request-ID` response header and audit-log request IDs.
 - Latency visibility: `X-Process-Time-Ms` and in-process p50/p95 counters.
 - Backpressure: per-client request limit and maximum resume upload size.
+- Worker-safe backpressure: set `REDIS_URL` to use shared `INCR`/`EXPIRE` buckets; if unavailable, the service falls back to the documented single-process limiter.
 - Caching: TTL cache for ranking reads with invalidation on candidate/job writes.
 - Idempotency: unique candidate/job match rows with upsert behavior.
 - Auditability: immutable audit logs for decision-impacting workflows.
+- Authentication: 15-minute access tokens, rotating hashed refresh tokens, reset tokens, and five-attempt temporary lockout.
+- Notifications: swappable transport interface with a console/log implementation for stage, shortlist, and interview-kit events.
+- Embeddings: install `backend/requirements-embeddings.txt` only on workers that enable the local model; the default API image uses the deterministic fallback and stays lightweight.
+- Dependency security: the 2026-10-10 frontend audit reports zero advisories after a compatible transitive update; CI uploads its audit artifact even on failure.
 - Database posture: configurable SQLite journal mode, busy timeout and query indexes.
+- Migration posture: Alembic's baseline is empty. It does not provision PostgreSQL or migrate the application schema; SQLite startup remains the current schema initializer.
 
 ## Pre-Deploy Verification
 
@@ -45,6 +54,16 @@ python -c "import ast,pathlib; [ast.parse(pathlib.Path(p).read_text(), filename=
 python backend/scripts/smoke_test.py --base-url http://127.0.0.1:8000
 docker compose config
 ```
+
+Run the containerized test path in CI or with Docker Desktop running:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.test.yml build
+docker compose -f docker-compose.yml -f docker-compose.test.yml run --rm --no-deps backend
+docker compose -f docker-compose.yml -f docker-compose.test.yml run --rm --no-deps frontend
+```
+
+The test override runs the backend coverage gate and frontend Vitest suite inside their build containers. CI additionally scans both tagged images with Trivy.
 
 The smoke suite validates 41 API checks across auth, RBAC, resume ingestion, matching, ranking, analytics, reports, candidate flows, admin flows, audit logs and platform ops.
 
