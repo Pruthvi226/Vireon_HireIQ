@@ -1,132 +1,42 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
 import { api } from "../api";
-import { useAuth } from "../auth/AuthContext";
+import PageShell from "../components/PageShell";
+import Pagination from "../components/Pagination";
 
 export default function AdminDashboard() {
-  const { user, logout } = useAuth();
-  const [state, setState] = useState({
-    users: [],
-    candidates: [],
-    jobs: [],
-    analytics: null,
-    platform: null,
-  });
+  const [users, setUsers] = useState({ items: [], total: 0 });
+  const [data, setData] = useState(null);
+  const [audit, setAudit] = useState([]);
+  const [page, setPage] = useState(1);
+  const [search, setSearch] = useState("");
+  const [query, setQuery] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
 
-  async function loadAdminData() {
-    setError("");
-    setLoading(true);
-    try {
-      const [users, candidates, jobs, analytics, platform] = await Promise.all([
-        api.adminUsers(),
-        api.adminCandidates(),
-        api.adminJobs(),
-        api.adminAnalytics(),
-        api.adminPlatformData(),
-      ]);
-      setState({ users, candidates, jobs, analytics, platform });
-    } catch (err) {
-      setError(err.message || "Failed to load admin data");
-    } finally {
-      setLoading(false);
-    }
-  }
-
   useEffect(() => {
-    loadAdminData();
-  }, []);
+    let active = true;
+    setLoading(true); setError("");
+    Promise.all([api.adminUsers({ page, search: query }), api.adminPlatformData(), api.systemAudit(20)]).then(([rows, overview, events]) => {
+      if (active) { setUsers(rows); setData(overview); setAudit(events); }
+    }).catch((err) => { if (active) setError(err.message); }).finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [page, query]);
 
-  const metrics = [
-    { label: "Users", value: state.analytics?.users ?? state.users.length },
-    { label: "Candidates", value: state.analytics?.candidates ?? state.candidates.length },
-    { label: "Jobs", value: state.analytics?.jobs ?? state.jobs.length },
-    { label: "Matches", value: state.analytics?.matches ?? 0 },
-  ];
-
-  return (
-    <main className="role-shell">
-      <header className="role-topbar">
-        <div>
-          <span className="eyebrow">Admin dashboard</span>
-          <h1>Platform control center</h1>
-          <p>Signed in as {user?.name}</p>
-        </div>
-        <div className="role-actions">
-          <Link className="btn btn-secondary" to="/recruiter">
-            Recruiter console
-          </Link>
-          <button className="btn btn-outline" onClick={loadAdminData} disabled={loading}>
-            Refresh
-          </button>
-          <button className="btn btn-primary" onClick={logout}>
-            Logout
-          </button>
-        </div>
-      </header>
-
-      {error && <div className="alert alert-danger">{error}</div>}
-
-      <section className="metrics-grid">
-        {metrics.map((metric) => (
-          <article className="metric-card" key={metric.label}>
-            <span className="metric-label">{metric.label}</span>
-            <div className="metric-value-container">
-              <strong className="metric-value">{metric.value}</strong>
-            </div>
-          </article>
-        ))}
-      </section>
-
-      <section className="grid-2col">
-        <article className="panel">
-          <div className="panel-header">
-            <h3>Users</h3>
-            <span className="panel-subtitle">Registered role assignments</span>
-          </div>
-          <div className="data-table">
-            {state.users.map((item) => (
-              <div className="table-row" key={item.id}>
-                <strong>{item.name}</strong>
-                <span>{item.email}</span>
-                <span className="badge badge-strong">{item.role}</span>
-              </div>
-            ))}
-            {!state.users.length && <p className="empty-copy">No users found.</p>}
-          </div>
-        </article>
-
-        <article className="panel">
-          <div className="panel-header">
-            <h3>Jobs and analytics</h3>
-            <span className="panel-subtitle">Recent hiring pipelines</span>
-          </div>
-          <div className="data-table">
-            {state.analytics?.job_summaries?.map((job) => (
-              <div className="table-row" key={job.job_id}>
-                <strong>{job.title}</strong>
-                <span>{job.candidates} candidates</span>
-                <span>{job.average_score}% avg</span>
-              </div>
-            ))}
-            {!state.analytics?.job_summaries?.length && <p className="empty-copy">No analytics generated yet.</p>}
-          </div>
-        </article>
-      </section>
-
-      <section className="panel">
-        <div className="panel-header">
-          <h3>Platform data</h3>
-          <span className="panel-subtitle">Database and protected resource counts</span>
-        </div>
-        <div className="platform-grid">
-          <span>Database</span>
-          <code>{state.platform?.database || "Loading..."}</code>
-          <span>Protected API groups</span>
-          <code>/api/admin, /api/recruiter, /api/candidate</code>
-        </div>
-      </section>
-    </main>
-  );
+  return <PageShell title="Administration" description="Review workspace users, platform totals and recorded hiring actions.">
+    {error && <p className="error-message" role="alert">{error}</p>}
+    {loading && <p role="status">Loading workspace…</p>}
+    {data && <section className="metrics-grid">{["users", "candidates", "jobs", "matches"].map((key) => <article className="panel" key={key}><p className="eyebrow">{key}</p><h2>{data[key] ?? 0}</h2></article>)}</section>}
+    <section className="panel page-stack"><h2>Users</h2>
+      <form className="page-actions" onSubmit={(event) => { event.preventDefault(); setPage(1); setQuery(search); }}>
+        <label>Search users<input type="search" maxLength="120" placeholder="Name, email or role" value={search} onChange={(event) => setSearch(event.target.value)} /></label><button className="btn btn-primary" disabled={loading}>Search</button>
+      </form>
+      <div className="table-scroll"><table><caption className="sr-only">Workspace users</caption><thead><tr><th scope="col">Name</th><th scope="col">Email</th><th scope="col">Role</th><th scope="col">Company</th></tr></thead><tbody>{users.items.map((user) => <tr key={user.id}><td>{user.name}</td><td>{user.email}</td><td><span className="chip">{user.role}</span></td><td>{user.company_name || "—"}</td></tr>)}</tbody></table></div>
+      {!loading && !users.total && <p>No users match your search.</p>}
+      <Pagination page={page} total={users.total} onChange={setPage} disabled={loading} />
+    </section>
+    <section className="panel page-stack"><h2>Recent audit events</h2><p className="muted">Latest 20 events. Staff account provisioning is available through the local administrator command documented in the deployment guide.</p>
+      {!audit.length && <p>No recorded actions yet.</p>}
+      <ul className="audit-list">{audit.map((event) => <li key={event.event_id}><strong>{event.action}</strong><span>{event.actor_role || "System"} · {event.resource_type} {event.resource_id}</span><time>{new Date(event.created_at).toLocaleString()}</time></li>)}</ul>
+    </section>
+  </PageShell>;
 }

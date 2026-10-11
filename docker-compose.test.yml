@@ -1,0 +1,15 @@
+services:
+  backend:
+    environment:
+      APP_ENV: test
+      JWT_SECRET_KEY: test-secret-key-with-at-least-32-chars
+      VIREON_DATA_DIR: /tmp/vireon-test
+    command: ["python", "-m", "pytest", "-q", "--cov=app", "--cov=auth", "--cov-fail-under=80", "tests"]
+    volumes: []
+
+  frontend:
+    build:
+      target: build
+    command: ["npm", "test", "--", "--run"]
+    depends_on: []
+    ports: []

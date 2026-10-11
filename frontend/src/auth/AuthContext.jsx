@@ -1,83 +1,63 @@
-import { createContext, useContext, useEffect, useMemo, useState } from "react";
-import { apiAuth, authStorage } from "./apiAuth";
+import { createContext, useContext, useEffect, useState } from "react";
+import { API_BASE, SESSION_EVENT, clearSession, errorMessage, saveSession, sessionFetch } from "./session";
 
 const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
-  const [token, setToken] = useState(() => authStorage.getToken());
-  const [user, setUser] = useState(() => authStorage.getUser());
-  const [loading, setLoading] = useState(Boolean(authStorage.getToken()));
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(() => Boolean(localStorage.getItem("vireon_token")));
 
   useEffect(() => {
     let active = true;
-    async function restoreSession() {
-      if (!authStorage.getToken()) {
-        setLoading(false);
-        return;
-      }
-      try {
-        const currentUser = await apiAuth.me();
-        if (!active) return;
-        setUser(currentUser);
-        setToken(authStorage.getToken());
-        localStorage.setItem(authStorage.userKey, JSON.stringify(currentUser));
-      } catch {
-        authStorage.clearSession();
-        if (!active) return;
-        setToken(null);
-        setUser(null);
-      } finally {
-        if (active) setLoading(false);
-      }
+    function update() {
+      try { setUser(JSON.parse(localStorage.getItem("vireon_user") || "null")); }
+      catch { setUser(null); }
     }
-    restoreSession();
+    window.addEventListener(SESSION_EVENT, update);
+    const syncStorage = (event) => { if (event.key === "vireon_token" || event.key === null) window.location.reload(); };
+    window.addEventListener("storage", syncStorage);
+    if (localStorage.getItem("vireon_token")) {
+      sessionFetch(`${API_BASE}/auth/me`).then(async (response) => {
+        if (!response.ok) throw new Error("Session validation failed");
+        const identity = await response.json();
+        if (active && localStorage.getItem("vireon_token")) {
+          localStorage.setItem("vireon_user", JSON.stringify(identity));
+          setUser(identity);
+        }
+      }).catch(() => { if (active) clearSession(); }).finally(() => { if (active) setLoading(false); });
+    }
     return () => {
       active = false;
+      window.removeEventListener(SESSION_EVENT, update);
+      window.removeEventListener("storage", syncStorage);
     };
   }, []);
 
-  async function login(email, password) {
-    const session = await apiAuth.login({ email, password });
-    authStorage.saveSession(session);
-    setToken(session.access_token);
-    setUser(session.user);
-    return session.user;
+  async function authenticate(path, payload) {
+    const response = await fetch(`${API_BASE}/auth/${path}`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(errorMessage(data, "Authentication failed"));
+    saveSession(data);
+    setUser(data.user);
+    return data.user;
   }
 
-  async function register(payload) {
-    const session = await apiAuth.register(payload);
-    authStorage.saveSession(session);
-    setToken(session.access_token);
-    setUser(session.user);
-    return session.user;
-  }
-
-  function logout() {
-    authStorage.clearSession();
-    setToken(null);
+  async function logout() {
+    const token = localStorage.getItem("vireon_token");
+    clearSession();
     setUser(null);
+    try {
+      await fetch(`${API_BASE}/auth/logout`, { method: "POST", headers: token ? { Authorization: `Bearer ${token}` } : {} });
+    } catch { /* Local logout succeeds if the server is unreachable. */ }
   }
 
-  const value = useMemo(
-    () => ({
-      token,
-      user,
-      loading,
-      isAuthenticated: Boolean(token && user),
-      login,
-      register,
-      logout,
-    }),
-    [token, user, loading],
-  );
-
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+  return <AuthContext.Provider value={{ user, loading, login: (email, password) => authenticate("login", { email, password }), register: (payload) => authenticate("register", payload), logout }}>{children}</AuthContext.Provider>;
 }
 
 export function useAuth() {
-  const value = useContext(AuthContext);
-  if (!value) {
-    throw new Error("useAuth must be used inside AuthProvider");
-  }
-  return value;
+  const context = useContext(AuthContext);
+  if (!context) throw new Error("useAuth must be used inside AuthProvider");
+  return context;
 }

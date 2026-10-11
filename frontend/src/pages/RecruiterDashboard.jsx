@@ -1,5 +1,2 @@
 import App from "../App";
-
-export default function RecruiterDashboard() {
-  return <App />;
-}
+export default App;
