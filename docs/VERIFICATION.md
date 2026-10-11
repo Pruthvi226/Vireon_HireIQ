@@ -1,9 +1,9 @@
 # Verification report
 
-Final verification date: 2026-10-11 (Asia/Calcutta). Source edits remain in this
-workspace; nothing was published, deployed, purchased, migrated on a live system,
-or committed. Git commands fail because repository metadata resolves to an
-unrelated `Finance_Tracker/finance-tracker/.git` path. Metadata was not rewritten.
+Verification date: 2026-10-11 (Asia/Calcutta). Source updates are published on the
+`vireon-hireiq-from-scratch` GitHub branch. No production service has been deployed,
+purchased or migrated. The latest local container verification passes the strict
+HIGH/CRITICAL vulnerability gate; see the Alpine resolution below for scope.
 
 ## Executed checks
 
@@ -28,8 +28,8 @@ coverage over `app` and `auth`; it is not exhaustive path or security coverage.
 Audit tools report known database entries at execution time, not proof of safety.
 The installed Python graph was audited; optional embedding/load extras were not
 installed or audited. Release CI repeats the scan against its resolved packages.
-One Starlette test-client deprecation warning remains: its current HTTPX adapter
-is supported but recommends a future `httpx2` test-client migration.
+Existing deprecation warnings include the Starlette HTTPX test-client adapter,
+`datetime.utcnow()` calls under Python 3.12 and PyMuPDF extension types.
 
 ## Verified behavior changes
 
@@ -50,9 +50,8 @@ is supported but recommends a future `httpx2` test-client migration.
 
 - Browser UI, screenshots, real viewport and screen-reader checks: no connected
   browser was available; Browser discovery returned an empty list.
-- Docker image builds, containerized tests, Nginx runtime and Trivy scans: Docker
-  Desktop daemon is not running. Only Compose configuration was validated.
-- GitHub Actions itself was not run from this environment.
+- Container builds, tests and scans on other architectures: only Linux amd64
+  was verified in the dated container checks below.
 - Production TLS/domain verification, monitoring integration, disaster-recovery
   drills and rollback on a target: no approved deployment target supplied.
 - Concurrent API load, WAL-specific performance, Core Web Vitals and fairness:
@@ -121,7 +120,8 @@ CVE-2026-9538. The Debian tracker confirms the stable-release patch gap for
 [util-linux](https://security-tracker.debian.org/tracker/CVE-2026-76642),
 [ncurses](https://security-tracker.debian.org/tracker/CVE-2025-69720) and
 [Perl](https://security-tracker.debian.org/tracker/CVE-2026-9538).
-This is an unresolved release blocker, not an accepted exception or a clean scan.
+This was an unresolved release blocker in the Debian image, not an accepted
+exception or a clean scan. The Alpine resolution below supersedes this blocker.
 Rebuild and rescan when Debian publishes patches; changing the runtime distribution
 would require a separate compatibility review.
 
@@ -129,3 +129,33 @@ CI retains exit code 1 for all HIGH/CRITICAL findings, including unfixed finding
 The frontend scan runs even when the backend scan fails, and both JSON reports
 are uploaded as the `image-vulnerability-reports` artifact. A failing image gate
 must continue to block release approval.
+
+## Strict gate resolution: Alpine runtime (2026-10-11)
+
+The backend now uses the official Python 3.12 Alpine image pinned by digest in
+both stages, with current Alpine package updates and the C++ runtime needed by
+PyMuPDF. Every API dependency installs from an Alpine-compatible binary wheel;
+missing wheels fail the build instead of silently compiling against different
+system libraries. Pip remains absent from the final image.
+
+Scikit-learn was only imported by `scripts/evaluate.py`. It is retained at its
+existing version in `requirements-evaluation.txt` for offline evaluation on a
+compatible development host. The API no longer installs scikit-learn or its
+SciPy dependencies, and scoring behavior is unchanged. The production image
+does not support running the offline evaluation script. See README installation
+instructions for that tooling.
+
+| Check on the final Alpine backend | Result |
+| --- | --- |
+| Production image build | Passed |
+| Trivy 0.70.0 vulnerability and secret scan | 0 HIGH/CRITICAL vulnerabilities; 0 HIGH/CRITICAL secrets; exit code 0 |
+| Unfixed vulnerabilities excluded | No |
+| Backend container tests | 37 passed; 86.35% statement coverage |
+| Live container API smoke suite | 41 checks passed; temporary test container removed |
+| Native library compatibility | Valid PDF and DOCX extraction, NumPy linear algebra and pandas operations passed |
+
+The frontend's final image was also clean in the saved GitHub scan report from
+run #4. CI still uses exit code 1 and `ignore-unfixed: false` for both scans.
+Results apply to the scanned Linux amd64 images and vulnerability database
+snapshot; other architectures and future database updates need separate scans.
+No vulnerability exclusions or distribution metadata removal were used.

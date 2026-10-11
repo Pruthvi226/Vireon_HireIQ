@@ -1,19 +1,21 @@
-FROM python:3.12-slim AS build
+FROM python:3.12-alpine@sha256:1b668429b3511ab407d8e00648891631b0b1a4d7e15e3ca70f38ab5b91ad4ab4 AS build
 
 WORKDIR /app
 
 COPY requirements.txt .
 RUN python -m venv /opt/venv \
     && /opt/venv/bin/pip install --no-cache-dir --upgrade pip==26.2.1 \
-    && /opt/venv/bin/pip install --no-cache-dir -r requirements.txt \
+    && /opt/venv/bin/pip install --no-cache-dir --only-binary=:all: -r requirements.txt \
     && /opt/venv/bin/python -m pip uninstall --yes pip
 
-FROM python:3.12-slim AS runtime
+FROM python:3.12-alpine@sha256:1b668429b3511ab407d8e00648891631b0b1a4d7e15e3ca70f38ab5b91ad4ab4 AS runtime
 
 WORKDIR /app
 # Package installation is completed in the build stage. Do not ship pip's
 # bundled dependencies or ensurepip's installer wheel in the runtime image.
-RUN python -m pip uninstall --yes pip \
+RUN apk --no-cache upgrade \
+    && apk add --no-cache libstdc++ \
+    && python -m pip uninstall --yes pip \
     && rm -rf /usr/local/lib/python3.12/ensurepip
 ENV PATH="/opt/venv/bin:$PATH" \
 	PYTHONDONTWRITEBYTECODE=1 \
@@ -30,7 +32,7 @@ COPY pytest.ini ./pytest.ini
 COPY alembic.ini ./alembic.ini
 COPY alembic ./alembic
 
-RUN addgroup --system appgroup && adduser --system --ingroup appgroup appuser \
+RUN addgroup -S appgroup && adduser -S -G appgroup appuser \
 	&& mkdir -p /app/storage \
 	&& chown -R appuser:appgroup /app
 USER appuser

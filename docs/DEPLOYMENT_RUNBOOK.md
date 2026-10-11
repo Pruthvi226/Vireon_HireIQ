@@ -1,9 +1,10 @@
 # Deployment and recovery runbook
 
 Prepared 2026-10-10. No service has been deployed or purchased. Commands below
-are for an explicitly approved target. Local tests and Compose configuration
-validation have run; container builds, HTTPS and restore drills on a target have
-not run because Docker Desktop is stopped and no hosting target is supplied.
+are for an explicitly approved target. Local tests, Compose configuration
+validation and container builds have run. See the dated container verification
+in [VERIFICATION.md](VERIFICATION.md). HTTPS and restore drills on a target
+have not run because no hosting target is supplied.
 
 ## Supported deployment shape
 

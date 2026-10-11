@@ -88,6 +88,10 @@ cp .env.example .env
 uvicorn app.main:app --reload --port 8000
 ```
 
+For offline model evaluation, install `pip install -r requirements-evaluation.txt`
+in the backend environment before running `python scripts/evaluate.py`.
+Scikit-learn is evaluation tooling; the API and production image do not require it.
+
 Recommended backend environment. In non-development environments, `JWT_SECRET_KEY` is required, must be at least 32 characters, and must never be committed. Generate it with `openssl rand -hex 32`.
 
 ```env
@@ -168,6 +172,10 @@ docker compose up --build
 - API docs: `http://localhost:8000/docs`
 
 The production frontend container serves the React build through Nginx and proxies `/api/*` to the backend container. SQLite data is persisted in the `vireon_data` Docker volume. Docker Compose waits for backend readiness before starting the web container and exposes health checks for both services.
+
+The API image uses Python 3.12 on Alpine, with native dependencies installed from
+binary wheels and no runtime pip installer. CI scans both final images and blocks
+all HIGH/CRITICAL findings, including those without an available patch.
 
 Alembic migration scaffolding is available in `backend/alembic`; the current zero-config runtime remains SQLite-compatible while a complete SQLAlchemy repository migration is staged for PostgreSQL production deployments.
 
